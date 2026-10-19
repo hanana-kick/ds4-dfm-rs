@@ -16,7 +16,7 @@ use ds4_server::parse::EosPolicy;
 use ds4_server::{
     accept_loop, accept_loop_with_engine, accept_loop_with_engine_cont, dist_weight_slice,
     listen_if_allowed, model_id_from_gguf_path, run_assembled_worker, server_launch, ContLane,
-    DistArgs, NativeDecode, ServerConfig, ServerLaunch, WORKER_REQUIRES_MODEL,
+    DistArgs, NativeDecode, ServerConfig, ServerLaunch, V41ContLane, WORKER_REQUIRES_MODEL,
 };
 use std::path::Path;
 
@@ -627,6 +627,13 @@ fn main() {
     };
     let mut kv_store = if model.is_some() { kv_store } else { None };
 
+    // V4.1 uses its own native sequence states and must not create the
+    // unrelated general-purpose DFM BatchCtx (which needs ds4_session).
+    let v41_batch_width = if v41_route.is_some() && cont_width > 1 && backend == Backend::Cuda {
+        Some(cont_width as usize)
+    } else {
+        None
+    };
     let lane = if let Some(ref model) = model {
         // What only the open engine knows. The refit re-resolves so a
         // fitted-down width or a refused lane cannot stay silently claimed.
@@ -641,7 +648,7 @@ fn main() {
         model
             .ssd_quote(&mut opened)
             .unwrap_or_else(|error| cli_error(&error.message));
-        if cont_width > 0 && backend == Backend::Cuda {
+        if cont_width > 0 && backend == Backend::Cuda && v41_route.is_none() {
             match model.batch_ctx_fit(
                 cfg.ctx,
                 cont_width,
@@ -730,11 +737,12 @@ fn main() {
                 }
             }
         } else {
-            // Serial HTTP and distributed workers also need confirmed IPC
-            // ownership after open; their session graphs are still lazy.
+            // V4.1 opt-in: native per-request KV + shared Forward, not the
+            // existing ds4_session bank runtime. Report only capabilities
+            // actually fitted by the dedicated V4.1 constructor.
             let mut facts = EngineFacts {
-                banks_fitted: Some(1),
-                cont_lane: Some(false),
+                banks_fitted: Some(v41_batch_width.unwrap_or(1) as u32),
+                cont_lane: Some(v41_batch_width.is_some()),
                 partial_reuse: Some(false),
                 ..opened
             };
@@ -863,6 +871,7 @@ fn main() {
             .serving_plan
             .as_ref()
             .map_or(plan.effective.prefix_reuse, |p| p.effective.prefix_reuse);
+        let engine_v41_route_for_batch = v41_route.clone();
         let mut engine = NativeDecode::new(model, cfg.ctx)
             .with_vocab(model.vocab())
             .with_prefix_reuse(reuse);
@@ -872,9 +881,23 @@ fn main() {
         if let Some(store) = kv_store {
             engine = engine.with_store(store);
         }
-        match lane {
-            Some(mut lane) => accept_loop_with_engine_cont(listener, cfg, &mut engine, &mut lane),
-            None => accept_loop_with_engine(listener, cfg, &mut engine),
+        if let Some(max_rows) = v41_batch_width {
+            let route = engine_v41_route_for_batch.as_ref().expect("V4.1 batch must have its route");
+            let mut v41_lane = V41ContLane::new(
+                model,
+                route.model_path.clone(),
+                route.engram_dir.clone(),
+                cfg.ctx,
+                max_rows,
+                route.vision,
+            )
+            .unwrap_or_else(|e| cli_error(&format!("V4.1 continuous lane: {e}")));
+            accept_loop_with_engine_cont(listener, cfg, &mut engine, &mut v41_lane);
+        } else {
+            match lane {
+                Some(mut lane) => accept_loop_with_engine_cont(listener, cfg, &mut engine, &mut lane),
+                None => accept_loop_with_engine(listener, cfg, &mut engine),
+            }
         }
     } else {
         accept_loop(listener, cfg);

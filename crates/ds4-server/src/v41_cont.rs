@@ -1,7 +1,7 @@
 //! DeepSeek V4.1 native multi-request scheduler, DFM Rust HTTP host.
- //!
- //! YoungAi is the batch-kernel reference, not the HTTP server. Keep the
- //! original DFM V4.1 serial route for roll-ineligible requests.
+//!
+//! YoungAi is the batch-kernel reference, not the HTTP server. Keep the
+//! original DFM V4.1 serial route for roll-ineligible requests.
 
 #![cfg(feature = "native")]
 
@@ -242,7 +242,7 @@ impl<'m> V41ContLane<'m> {
             self.ctx,
         );
         let t_admit = Instant::now();
-        let native = V41BatchRequest::open(
+        let native = match V41BatchRequest::open(
             self.model,
             &self.model_path,
             self.engram_dir.as_deref(),
@@ -250,8 +250,10 @@ impl<'m> V41ContLane<'m> {
             stepper.max_tokens.max(0),
             sampling,
             images,
-        )
-        .map_err(|e| (work, GenerateError::Engine(e.to_string())))?;
+        ) {
+            Ok(native) => native,
+            Err(error) => return Err((work, GenerateError::Engine(error.to_string()))),
+        };
         let mut slot = Slot {
             work,
             stepper,
@@ -393,6 +395,17 @@ impl ContExec for V41ContLane<'_> {
 
     fn encode_text(&self, text: &str) -> Vec<i32> {
         self.vocab.encode_text(text)
+    }
+
+    // The native V4.1 request expands and validates image positions while
+    // admitting; the generic Qwen-only continuous image hook must not run.
+    fn prepare_tokens(
+        &self,
+        _parsed: &ParsedRequest,
+        _prompt: &[u8],
+        tokens: Vec<i32>,
+    ) -> Result<Vec<i32>, GenerateError> {
+        Ok(tokens)
     }
 
     fn seq_cap(&self) -> i32 {

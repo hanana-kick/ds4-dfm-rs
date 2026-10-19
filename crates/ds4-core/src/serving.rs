@@ -659,6 +659,10 @@ pub fn native_ctx_default(caps: ServingCaps) -> Option<u32> {
 }
 
 pub fn serving_caps(family: ModelFamily, variant: Variant) -> ServingCaps {
+    // Experimental V4.1 native batch is gated independently of the other
+    // families' ds4_session-based bank runtime. The user must opt in and
+    // explicitly disable MTP and prefix reuse until their batch gates pass.
+    let v41_batch = std::env::var_os("DS41_EXPERIMENTAL_BATCH").is_some();
     // V4.1 has no ds4_session, but its native prompt-end checkpoint provides
     // exact prefix reuse and KVC disk restoration. Common off|exact|auto
     // controls select that checkpoint; partial forks, banks and session
@@ -669,11 +673,11 @@ pub fn serving_caps(family: ModelFamily, variant: Variant) -> ServingCaps {
         return ServingCaps {
             family,
             variant,
-            banks: BankLane::Serial,
-            bank_support: Support::None,
-            reuse: ReuseKind::Exact,
-            reuse_support: Support::Present,
-            disk: Support::Present,
+            banks: if v41_batch { BankLane::OptIn } else { BankLane::Serial },
+            bank_support: if v41_batch { Support::Present } else { Support::None },
+            reuse: if v41_batch { ReuseKind::None } else { ReuseKind::Exact },
+            reuse_support: if v41_batch { Support::None } else { Support::Present },
+            disk: if v41_batch { Support::None } else { Support::Present },
             snapshot: Support::None,
             mtp: MtpKind::Embedded,
             mtp_support: Support::Qualified,

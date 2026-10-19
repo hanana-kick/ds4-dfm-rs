@@ -39,6 +39,8 @@ jobs:
           python3 -m compileall -q scripts/ci/v41_api_gate.py
           python3 -m unittest discover -s scripts/ci -p 'test_v41_*.py' -v
           bash -n scripts/ci/v41-batch-gpu.sh
+      - name: Compile native V4.1 C and Rust FFI bridge
+        run: make -j2 ds4.o rust-bridge
       - name: Rust model-free tests
         run: |
           cargo test -p ds4-core --lib v41

@@ -498,9 +498,8 @@ fn main() {
         && ident
             .as_ref()
             .is_some_and(|id| id.shape.variant == ds4_core::Variant::DeepSeek41Flash)
-        && std::env::var("DS41_EXPERIMENTAL_BATCH").is_ok_and(|v| {
-            matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
-        });
+        && std::env::var("DS41_EXPERIMENTAL_BATCH")
+            .is_ok_and(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"));
     if v41_batch_requested {
         if plan.effective.mtp_mode != MtpMode::Off {
             cli_error("V4.1 batch MTP is not qualified: use --mtp-mode off with --max-seqs > 1");

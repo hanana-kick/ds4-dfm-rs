@@ -695,6 +695,16 @@ impl V41Feed {
         c.splice_hist(0, tokens);
     }
 
+    /// Vision placeholders block all earlier n-gram positions. The same mask
+    /// must be used by serial and batched Engram providers, or a visually
+    /// correct prefill still hashes incorrect table rows.
+    pub fn set_image_signatures(&mut self, signatures: &[u64]) {
+        let mut core = self.core.lock().unwrap();
+        core.image_mask.clear();
+        core.image_mask
+            .extend(signatures.iter().map(|&sig| u8::from(sig != 0)));
+    }
+
     fn prepare_inner(
         &mut self,
         pos0: u32,
@@ -1666,6 +1676,9 @@ impl<'m> V41BatchRequest<'m> {
                 feed,
             })
         });
+        if let (Some(feed), Some(images)) = (feed.as_deref_mut(), images.as_ref()) {
+            feed.feed.set_image_signatures(&images.sig_of);
+        }
         let fptr: *mut c_void = feed.as_deref_mut().map_or(std::ptr::null_mut(), |f| {
             (f as *mut V41BatchFeed).cast::<c_void>()
         });
@@ -2151,11 +2164,8 @@ impl Model {
         } else {
             signatures.as_ptr()
         };
-        if let Some(f) = &feed {
-            let mut core = f.core.lock().unwrap();
-            core.image_mask.clear();
-            core.image_mask
-                .extend(signatures.iter().map(|&sig| u8::from(sig != 0)));
+        if let Some(f) = feed.as_mut() {
+            f.set_image_signatures(signatures);
         }
         phase_log(phases, "engram feed open", t_feed);
         let t_mount = Instant::now();
@@ -2648,12 +2658,12 @@ mod tests {
         let mut second = V41Feed::from_assets(assets);
         first.seed_prefix(&[101, 202, 303]);
         second.seed_prefix(&[7, 8]);
-        first.core.lock().unwrap().image_mask.push(1);
+        first.set_image_signatures(&[0, 75, 0]);
         let c1 = first.core.lock().unwrap();
         let c2 = second.core.lock().unwrap();
         assert_eq!(c1.hist, [101, 202, 303]);
         assert_eq!(c2.hist, [7, 8]);
-        assert_eq!(c1.image_mask, [1]);
+        assert_eq!(c1.image_mask, [0, 1, 0]);
         assert!(c2.image_mask.is_empty());
         assert!(Arc::ptr_eq(&c1.hash, &c2.hash));
         assert!(!Arc::ptr_eq(&first.core, &second.core));

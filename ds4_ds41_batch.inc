@@ -29,6 +29,7 @@ typedef struct ds4_v41_batch {
     ds4_v41_state rows;         /* shared dense + attention projection rows */
     uint32_t cap;               /* row capacity, not a model context cap */
     float *onehot;
+    ds4_gpu_tensor *greedy_ids; /* one device argmax for every decode row */
 } ds4_v41_batch;
 
 typedef struct {
@@ -252,6 +253,7 @@ struct ds4_v41_batch *ds4_v41_batch_create(void *engine, int rows) {
     b->onehot = (float *)calloc((size_t)b->cap * DS4_N_HC, sizeof(float));
     if (!b->onehot) ok = false;
     if (b->onehot) for (uint32_t i = 0; i < b->cap; i++) b->onehot[i * DS4_N_HC] = 1.0f;
+    b->greedy_ids = v41_alloc((uint64_t)b->cap * sizeof(int32_t), &ok);
     if (!ok) { ds4_v41_batch_destroy(b); return NULL; }
     return b;
 }
@@ -259,6 +261,7 @@ void ds4_v41_batch_destroy(struct ds4_v41_batch *b) {
     if (!b) return;
     (void)ds4_gpu_synchronize();
     v41_state_free(&b->rows);
+    if (b->greedy_ids) ds4_gpu_tensor_free(b->greedy_ids);
     free(b->onehot); free(b);
 }
 static bool v41_batch_body(ds4_v41_batch *b, ds4_v41_request *const *req, int n) {
@@ -346,10 +349,27 @@ int ds4_v41_batch_step(struct ds4_v41_batch *b, struct ds4_v41_request *const *r
             ok = body_ok && end_ok && sync_ok;
         }
     }
-    /* Read logits through per-row views before freeing them. */
-    for (int i = 0; ok && i < n; i++)
-        if (!v41_next_token(&r[i]->st, r[i]->am, 0u, r[i]->rowbuf,
-                            &r[i]->rng, &r[i]->hist, &next[i])) ok = false;
+    /* Bare greedy is the common tool-evaluation path: select all rows with
+     * one GPU launch and readback. The generic rows kernel explicitly uses
+     * the same lowest-index tie-break as V4.1 argmax. Other sampling routes
+     * keep their request-local temperature, RNG and penalty histories. */
+    if (ok) {
+        bool all_greedy = true;
+        for (int i = 0; i < n; ++i) {
+            if (r[i]->st.dev_sample || r[i]->rowbuf) { all_greedy = false; break; }
+        }
+        if (all_greedy) {
+            ok = ds4_gpu_argmax_rows_tensor(b->greedy_ids, b->rows.logits, DS4_N_VOCAB, (uint32_t)n) &&
+                 ds4_gpu_synchronize() &&
+                 ds4_gpu_tensor_read(b->greedy_ids, 0, next, (uint64_t)n * sizeof(int32_t));
+        } else {
+            /* A mixed greedy/sampled batch still shares its expensive
+             * Forward; only its small output sampler remains request-local. */
+            for (int i = 0; ok && i < n; i++)
+                if (!v41_next_token(&r[i]->st, r[i]->am, 0u, r[i]->rowbuf,
+                                    &r[i]->rng, &r[i]->hist, &next[i])) ok = false;
+        }
+    }
     for (int i = 0; i < attached; i++) {
         ds4_v41_state *st = &r[i]->st;
         if (ok) {

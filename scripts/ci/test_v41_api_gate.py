@@ -10,7 +10,12 @@ class TestV41Gate(unittest.TestCase):
         self.assertEqual(gate.png((255,0,0))[:8],b"\x89PNG\r\n\x1a\n")
     def test_image_identities(self):
         cases=gate.cases("big")
-        self.assertEqual(len(cases),12)
+        self.assertGreaterEqual(len(cases), 28)
+        self.assertEqual(len(cases), len({case["id"] for case in cases}))
+        self.assertGreaterEqual(
+            sum(case["id"].startswith("v") for case in cases), 8
+        )
+        self.assertEqual(gate.cases("big", 128)[0]["request"]["max_tokens"], 128)
         a=next(c for c in cases if c["id"]=="v1")
         b=next(c for c in cases if c["id"]=="v2")
         self.assertNotEqual(gate.digest(a["request"]),gate.digest(b["request"]))

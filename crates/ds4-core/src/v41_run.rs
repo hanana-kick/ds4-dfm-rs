@@ -1565,6 +1565,278 @@ enum EngramMode {
     Off,
 }
 
+
+/// Independent DeepSeek V4.1 KV request: native request owns GPU tensors;
+/// Rust owns Engram history/worker, original prompt and Vision patches.
+/// Do not move these borrowed buffers out before native close.
+pub struct V41BatchRequest<'m> {
+    raw: std::ptr::NonNull<ds4_sys::ds4_bridge_v41_req>,
+    _model: &'m Model,
+    _prompt: Vec<i32>,
+    _images: Option<crate::v41_media::V41Images>,
+    _patches: Vec<ds4_sys::ds4_bridge_v41_image>,
+    _feed: Option<Box<V41BatchFeed>>,
+}
+
+struct V41BatchFeed {
+    feed: V41Feed,
+    n_layers: usize,
+}
+
+unsafe extern "C" fn v41_batch_rows_tramp(
+    pos0: u32,
+    tokens: *const i32,
+    n: i32,
+    dst: *const *mut u8,
+    ud: *mut c_void,
+) -> i32 {
+    if ud.is_null() || dst.is_null() || tokens.is_null() || n <= 0 {
+        return 1;
+    }
+    let t = &mut *(ud as *mut V41BatchFeed);
+    let ids = std::slice::from_raw_parts(tokens, n as usize);
+    let out = std::slice::from_raw_parts(dst, t.n_layers);
+    match catch_unwind(AssertUnwindSafe(|| t.feed.prepare(pos0, ids, out))) {
+        Ok(Ok(())) => 0,
+        _ => 1,
+    }
+}
+
+unsafe extern "C" fn v41_batch_wait_tramp(layer: i32, ud: *mut c_void) -> i32 {
+    if ud.is_null() || layer < 0 {
+        return 1;
+    }
+    let t = &mut *(ud as *mut V41BatchFeed);
+    match catch_unwind(AssertUnwindSafe(|| t.feed.wait_layer(layer as u32))) {
+        Ok(Ok(())) => 0,
+        _ => 1,
+    }
+}
+
+unsafe extern "C" fn v41_batch_next_tramp(
+    pos0: u32,
+    tokens: *const i32,
+    n: i32,
+    ud: *mut c_void,
+) -> i32 {
+    if ud.is_null() || tokens.is_null() || n <= 0 {
+        return 1;
+    }
+    let t = &mut *(ud as *mut V41BatchFeed);
+    let ids = std::slice::from_raw_parts(tokens, n as usize);
+    match catch_unwind(AssertUnwindSafe(|| t.feed.prefetch_next(pos0, ids))) {
+        Ok(Ok(())) => 0,
+        _ => 1,
+    }
+}
+
+unsafe extern "C" fn v41_batch_drain_tramp(ud: *mut c_void) -> i32 {
+    if ud.is_null() {
+        return 0;
+    }
+    let t = &mut *(ud as *mut V41BatchFeed);
+    match catch_unwind(AssertUnwindSafe(|| t.feed.drain())) {
+        Ok(Ok(())) => 0,
+        _ => 1,
+    }
+}
+
+impl<'m> V41BatchRequest<'m> {
+    pub fn open(
+        model: &'m Model,
+        path: &Path,
+        engram_dir: Option<&str>,
+        prompt: Vec<i32>,
+        n_predict: i32,
+        sampling: V41Sampling,
+        images: Option<crate::v41_media::V41Images>,
+    ) -> Result<Self> {
+        if prompt.is_empty() || n_predict < 0 {
+            return Err(asset_error("V4.1 batch requires nonempty prompt and valid output cap"));
+        }
+        if let Some(img) = &images {
+            img.validate(&prompt)?;
+        }
+        let mut feed = V41Feed::open(path, engram_dir)?.map(|feed| {
+            Box::new(V41BatchFeed {
+                n_layers: feed.n_layers,
+                feed,
+            })
+        });
+        let fptr: *mut c_void = feed.as_deref_mut().map_or(std::ptr::null_mut(), |f| {
+            (f as *mut V41BatchFeed).cast::<c_void>()
+        });
+        let async_io = feed.as_deref().is_some_and(|f| f.feed.async_protocol());
+        let raw_patches: Vec<_> = images
+            .as_ref()
+            .map(|img| {
+                img.images
+                    .iter()
+                    .map(|i| ds4_sys::ds4_bridge_v41_image {
+                        patches: i.patches.as_ptr(),
+                        patches_len: i.patches.len() as u64,
+                        n_vit_h: i.plan.n_vit_h,
+                        n_vit_w: i.plan.n_vit_w,
+                        n_llm_h: i.plan.n_llm_h,
+                        n_llm_w: i.plan.n_llm_w,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let image_view = ds4_sys::ds4_bridge_v41_images {
+            img: raw_patches.as_ptr(),
+            n: raw_patches.len() as i32,
+            row_of: images.as_ref().map_or(std::ptr::null(), |i| i.row_of.as_ptr()),
+            sig_of: images.as_ref().map_or(std::ptr::null(), |i| i.sig_of.as_ptr()),
+            np: images.as_ref().map_or(0, |i| i.np),
+            n_rows: images.as_ref().map_or(0, |i| i.n_rows),
+        };
+        let sample = ds4_sys::ds4_bridge_v41_sampling {
+            temperature: sampling.temperature,
+            top_p: sampling.top_p,
+            min_p: sampling.min_p,
+            top_k: sampling.top_k,
+            seed: sampling.seed,
+            freq_penalty: sampling.freq_penalty,
+            presence_penalty: sampling.presence_penalty,
+            dry_multiplier: sampling.dry_multiplier,
+            dry_base: sampling.dry_base,
+            dry_allowed_length: sampling.dry_allowed_length,
+            greedy_fn: None,
+            greedy_ud: std::ptr::null_mut(),
+        };
+        let mut err = [0i8; 512];
+        let raw = unsafe {
+            ds4_sys::ds4_bridge_v41_req_open(
+                model.raw_ptr(),
+                prompt.as_ptr(),
+                prompt.len() as i32,
+                n_predict,
+                &sample,
+                if raw_patches.is_empty() { std::ptr::null() } else { &image_view },
+                if feed.is_some() { Some(v41_batch_rows_tramp) } else { None },
+                fptr,
+                if async_io { Some(v41_batch_wait_tramp) } else { None },
+                if async_io { Some(v41_batch_next_tramp) } else { None },
+                if feed.is_some() { Some(v41_batch_drain_tramp) } else { None },
+                err.as_mut_ptr(),
+                err.len(),
+            )
+        };
+        let raw = std::ptr::NonNull::new(raw).ok_or_else(|| {
+            asset_error(format!(
+                "V4.1 batch request open: {}",
+                unsafe { std::ffi::CStr::from_ptr(err.as_ptr()) }.to_string_lossy()
+            ))
+        })?;
+        Ok(Self {
+            raw,
+            _model: model,
+            _prompt: prompt,
+            _images: images,
+            _patches: raw_patches,
+            _feed: feed,
+        })
+    }
+
+    /// One prefill quantum. Returns true when prefill and first token are ready.
+    pub fn prefill_chunk(&mut self) -> Result<bool> {
+        match unsafe { ds4_sys::ds4_bridge_v41_req_prefill(self.raw.as_ptr()) } {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(asset_error("V4.1 request prefill failed")),
+        }
+    }
+
+    pub fn next_token(&self) -> Result<i32> {
+        let mut token = 0i32;
+        if unsafe { ds4_sys::ds4_bridge_v41_req_next(self.raw.as_ptr(), &mut token) } != 1 {
+            return Err(asset_error("V4.1 request has no available next token"));
+        }
+        Ok(token)
+    }
+
+    pub fn position(&self) -> i32 {
+        unsafe { ds4_sys::ds4_bridge_v41_req_position(self.raw.as_ptr()) }
+    }
+
+    pub fn progress(&self) -> Option<(i32, i32)> {
+        let mut done = 0;
+        let mut total = 0;
+        if unsafe {
+            ds4_sys::ds4_bridge_v41_req_progress(self.raw.as_ptr(), &mut done, &mut total)
+        } != 1
+        {
+            return None;
+        }
+        Some((done, total))
+    }
+}
+
+impl Drop for V41BatchRequest<'_> {
+    fn drop(&mut self) {
+        unsafe { ds4_sys::ds4_bridge_v41_req_close(self.raw.as_ptr()) };
+        // The bridge drains the Engram provider before the boxed feed drops.
+    }
+}
+
+/// Shared-row V4.1 target model decoder. A slot holds its own compressed KV
+/// and image-conditioned history; this object owns only the batched row slab.
+pub struct V41Batch<'m> {
+    raw: std::ptr::NonNull<ds4_sys::ds4_bridge_v41_batch>,
+    model: &'m Model,
+    max_rows: usize,
+}
+
+impl<'m> V41Batch<'m> {
+    pub fn open(model: &'m Model, max_rows: usize) -> Result<Self> {
+        if !(1..=16).contains(&max_rows) {
+            return Err(asset_error("V4.1 native batch width must be 1..16"));
+        }
+        let ptr =
+            unsafe { ds4_sys::ds4_bridge_v41_batch_open(model.raw_ptr(), max_rows as i32) };
+        let raw = std::ptr::NonNull::new(ptr)
+            .ok_or_else(|| asset_error("V4.1 native batch allocation failed"))?;
+        // Prefix reuse's serial-global checkpoint is never consumed by this
+        // request-local batch engine.
+        unsafe { ds4_sys::ds4_bridge_v41_kvreuse_set(0) };
+        Ok(Self {
+            raw,
+            model,
+            max_rows,
+        })
+    }
+
+    pub fn step(&mut self, requests: &mut [&mut V41BatchRequest<'m>]) -> Result<Vec<i32>> {
+        if requests.is_empty() || requests.len() > self.max_rows {
+            return Err(asset_error("V4.1 batch exceeds its row capacity"));
+        }
+        if requests.iter().any(|r| !std::ptr::eq(r._model, self.model)) {
+            return Err(asset_error("V4.1 batch contains a request from another model"));
+        }
+        let raw_requests: Vec<_> = requests.iter_mut().map(|r| r.raw.as_ptr()).collect();
+        let mut output = vec![0i32; requests.len()];
+        let rc = unsafe {
+            ds4_sys::ds4_bridge_v41_batch_step(
+                self.raw.as_ptr(),
+                raw_requests.as_ptr(),
+                requests.len() as i32,
+                output.as_mut_ptr(),
+            )
+        };
+        if rc != 0 {
+            return Err(asset_error("V4.1 native multi-row Forward failed; requests invalidated"));
+        }
+        Ok(output)
+    }
+}
+
+impl Drop for V41Batch<'_> {
+    fn drop(&mut self) {
+        unsafe { ds4_sys::ds4_bridge_v41_batch_close(self.raw.as_ptr()) };
+    }
+}
+
 /// Linux MemAvailable in MB (the engine's mem_available_mb,
 /// server_sched_v41.c:22-29); None when /proc/meminfo cannot be read, which
 /// leaves the admission open.  A negative value is not possible here.

@@ -46,6 +46,8 @@ jobs:
           cargo test -p ds4-core --lib v41
           DS41_EXPERIMENTAL_BATCH=1 cargo test -p ds4-core --lib v41_experimental_batch_contract
           cargo test -p ds4-server --lib v41
+      - name: Check Rust native HTTP server
+        run: cargo check -p ds4-server --features native --bin ds4-server-rs
 
   spark-gpu:
     needs: model-free

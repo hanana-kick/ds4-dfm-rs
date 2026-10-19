@@ -333,10 +333,17 @@ int ds4_v41_batch_step(struct ds4_v41_batch *b, struct ds4_v41_request *const *r
         attached++;
     }
     if (ok) {
-        if (!ds4_gpu_begin_commands()) ok = false;
-        else {
-            ok = v41_batch_body(b, r, n);
-            if (!ds4_gpu_end_commands() || !ds4_gpu_synchronize()) ok = false;
+        if (!ds4_gpu_begin_commands()) {
+            ok = false;
+        } else {
+            const bool body_ok = v41_batch_body(b, r, n);
+            const bool end_ok = ds4_gpu_end_commands() != 0;
+            /* Never short-circuit the GPU fence after a failed submission.
+             * View tensors and request-local KV may still be referenced by
+             * already-enqueued kernels even when the Forward reports error.
+             * Detaching them before the fence risks use-after-free. */
+            const bool sync_ok = ds4_gpu_synchronize() != 0;
+            ok = body_ok && end_ok && sync_ok;
         }
     }
     /* Read logits through per-row views before freeing them. */

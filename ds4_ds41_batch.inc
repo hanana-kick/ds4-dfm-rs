@@ -219,6 +219,7 @@ int ds4_v41_req_prefill_progress(const struct ds4_v41_request *r, int *completed
     if (!r || !completed || !total) return 0;
     *completed = (int)r->done; *total = (int)r->np; return 1;
 }
+void ds4_v41_batch_destroy(struct ds4_v41_batch *b);
 struct ds4_v41_batch *ds4_v41_batch_create(void *engine, int rows) {
     ds4_engine *e = (ds4_engine *)engine;
     if (!e || DS4_MODEL_VARIANT != DS4_VARIANT_V41 || rows < 2 || rows > (int)DS4_V41_MULTI_MAX) return NULL;

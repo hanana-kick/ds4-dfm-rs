@@ -404,6 +404,30 @@ int ds4_bridge_v41_generate(ds4_bridge_model *m,
                             ds4_bridge_v41_emit_fn emit, void *emit_ud,
                             ds4_bridge_v41_progress_fn progress, void *progress_ud,
                             char *err, size_t errlen);
+/* Long-lived V4.1 request state. Caller retains prompt, image patches and
+ * callback userdata until close; close drains the Engram worker first.
+ * Prefill: -1 error, 0 more chunks, 1 complete.
+ * Batch step: 0 success, nonzero failure invalidates ALL participating
+ * requests (partial KV writes cannot be rolled back safely). */
+typedef struct ds4_bridge_v41_req ds4_bridge_v41_req;
+typedef struct ds4_bridge_v41_batch ds4_bridge_v41_batch;
+ds4_bridge_v41_req *ds4_bridge_v41_req_open(
+    ds4_bridge_model *m, const int32_t *prompt, int n_prompt, int n_predict,
+    const ds4_bridge_v41_sampling *sampling, const ds4_bridge_v41_images *images,
+    ds4_bridge_v41_rows_fn rows, void *rows_ud,
+    ds4_bridge_v41_wait_fn wait, ds4_bridge_v41_next_fn next,
+    ds4_bridge_v41_drain_fn drain,
+    char *err, size_t errlen);
+void ds4_bridge_v41_req_close(ds4_bridge_v41_req *r);
+int ds4_bridge_v41_req_prefill(ds4_bridge_v41_req *r);
+int ds4_bridge_v41_req_progress(ds4_bridge_v41_req *r, int *completed, int *total);
+int ds4_bridge_v41_req_next(ds4_bridge_v41_req *r, int *next);
+int ds4_bridge_v41_req_position(ds4_bridge_v41_req *r);
+ds4_bridge_v41_batch *ds4_bridge_v41_batch_open(ds4_bridge_model *m, int max_rows);
+void ds4_bridge_v41_batch_close(ds4_bridge_v41_batch *b);
+int ds4_bridge_v41_batch_step(ds4_bridge_v41_batch *b,
+    ds4_bridge_v41_req *const *requests, int n, int32_t *next);
+
 int ds4_bridge_session_eval_layer_slice(ds4_bridge_session *s,
                                         const int32_t *tokens,
                                         uint32_t n_tokens,

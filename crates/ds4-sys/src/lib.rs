@@ -117,6 +117,15 @@ pub struct ds4_bridge_batch_ctx {
     _opaque: [u8; 0],
 }
 
+#[repr(C)]
+pub struct ds4_bridge_v41_req {
+    _opaque: [u8; 0],
+}
+#[repr(C)]
+pub struct ds4_bridge_v41_batch {
+    _opaque: [u8; 0],
+}
+
 pub type ds4_bridge_prefill_fn = Option<unsafe extern "C" fn(*mut c_void, i32, i32)>;
 
 /* V4.1 (ds41) callbacks (native/bridge/ds4_bridge.h): the rows provider fills
@@ -951,6 +960,35 @@ extern "C" {
         progress_ud: *mut c_void,
         err: *mut c_char,
         errlen: usize,
+    ) -> c_int;
+
+    /* DeepSeek V4.1 native per-request KV + shared-row Forward. */
+    pub fn ds4_bridge_v41_req_open(
+        m: *mut ds4_bridge_model,
+        prompt: *const i32, n_prompt: c_int, n_predict: c_int,
+        sampling: *const ds4_bridge_v41_sampling,
+        images: *const ds4_bridge_v41_images,
+        rows: ds4_bridge_v41_rows_fn, rows_ud: *mut c_void,
+        wait: ds4_bridge_v41_wait_fn, next: ds4_bridge_v41_next_fn,
+        drain: ds4_bridge_v41_drain_fn,
+        err: *mut c_char, errlen: usize,
+    ) -> *mut ds4_bridge_v41_req;
+    pub fn ds4_bridge_v41_req_close(r: *mut ds4_bridge_v41_req);
+    pub fn ds4_bridge_v41_req_prefill(r: *mut ds4_bridge_v41_req) -> c_int;
+    pub fn ds4_bridge_v41_req_progress(
+        r: *mut ds4_bridge_v41_req, completed: *mut c_int, total: *mut c_int
+    ) -> c_int;
+    pub fn ds4_bridge_v41_req_next(r: *mut ds4_bridge_v41_req, next: *mut c_int) -> c_int;
+    pub fn ds4_bridge_v41_req_position(r: *mut ds4_bridge_v41_req) -> c_int;
+    pub fn ds4_bridge_v41_batch_open(
+        m: *mut ds4_bridge_model, max_rows: c_int
+    ) -> *mut ds4_bridge_v41_batch;
+    pub fn ds4_bridge_v41_batch_close(b: *mut ds4_bridge_v41_batch);
+    pub fn ds4_bridge_v41_batch_step(
+        b: *mut ds4_bridge_v41_batch,
+        requests: *const *mut ds4_bridge_v41_req,
+        n: c_int,
+        next: *mut i32,
     ) -> c_int;
 
     pub fn ds4_bridge_session_eval_layer_slice(

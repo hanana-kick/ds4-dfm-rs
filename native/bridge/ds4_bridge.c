@@ -1043,6 +1043,112 @@ int ds4_bridge_v41_generate(ds4_bridge_model *m,
     return 0;
 }
 
+/* V4.1 native independent requests: Rust owns the scheduling/streaming
+ * policy, the bridge owns only native request/feed/images lifetime. */
+struct ds4_bridge_v41_req {
+    ds4_bridge_model *model;
+    struct ds4_v41_request *req;
+    ds4_v41_feed *feed;
+    struct ds4_v41_images *images;
+    ds4_bridge_v41_drain_fn drain;
+    void *rows_ud;
+};
+struct ds4_bridge_v41_batch {
+    ds4_bridge_model *model;
+    struct ds4_v41_batch *batch;
+};
+ds4_bridge_v41_req *ds4_bridge_v41_req_open(
+    ds4_bridge_model *m, const int32_t *prompt, int n_prompt, int n_predict,
+    const ds4_bridge_v41_sampling *sampling, const ds4_bridge_v41_images *images,
+    ds4_bridge_v41_rows_fn rows, void *rows_ud,
+    ds4_bridge_v41_wait_fn wait, ds4_bridge_v41_next_fn next,
+    ds4_bridge_v41_drain_fn drain,
+    char *err, size_t errlen)
+{
+    if (!m || !m->engine || !prompt || n_prompt < 1 || n_predict < 0 ||
+        (images && (images->np != (uint32_t)n_prompt || images->n < 1)) ||
+        ((rows || wait || next) && !drain)) {
+        set_err(err, errlen, "invalid V4.1 batch request or callback lifetime");
+        return NULL;
+    }
+    ds4_bridge_v41_req *r = calloc(1, sizeof *r);
+    if (!r) { set_err(err, errlen, "out of memory"); return NULL; }
+    r->model = m; r->drain = drain; r->rows_ud = rows_ud;
+    if (ds4_v41_engram_count(m->engine) > 0) {
+        if (!rows) { set_err(err, errlen, "V4.1 batch Engram provider missing"); goto fail; }
+        r->feed = ds4_v41_feed_open(m->engine, n_prompt, rows, rows_ud,
+                                    wait, rows_ud, next, rows_ud);
+        if (!r->feed) { set_err(err, errlen, "V4.1 batch Engram feed allocation failed"); goto fail; }
+    }
+    if (images) {
+        r->images = v41_bridge_images_build(images);
+        if (!r->images) { set_err(err, errlen, "invalid V4.1 batch image spans"); goto fail; }
+    }
+    ds4_decode_sampling sp = {0};
+    if (sampling) {
+        sp = (ds4_decode_sampling) {
+            .temperature = sampling->temperature, .top_p = sampling->top_p,
+            .min_p = sampling->min_p, .top_k = sampling->top_k, .seed = sampling->seed,
+            .freq_penalty = sampling->freq_penalty, .presence_penalty = sampling->presence_penalty,
+            .dry_multiplier = sampling->dry_multiplier, .dry_base = sampling->dry_base,
+            .dry_allowed_length = sampling->dry_allowed_length,
+            .greedy_fn = sampling->greedy_fn, .greedy_ud = sampling->greedy_ud
+        };
+    }
+    r->req = ds4_v41_req_create(m->engine, prompt, n_prompt, n_predict,
+                                 &sp, ds4_v41_feed_handle(r->feed), r->images);
+    if (!r->req) { set_err(err, errlen, "native V4.1 request allocation failed"); goto fail; }
+    return r;
+fail:
+    ds4_bridge_v41_req_close(r);
+    return NULL;
+}
+void ds4_bridge_v41_req_close(ds4_bridge_v41_req *r) {
+    if (!r) return;
+    if (r->req) ds4_v41_req_destroy(r->req);
+    if (r->feed && r->drain) (void)r->drain(r->rows_ud);
+    ds4_v41_feed_close(r->feed);
+    ds4_v41_images_free(r->images);
+    free(r);
+}
+int ds4_bridge_v41_req_prefill(ds4_bridge_v41_req *r) {
+    return r && r->req ? ds4_v41_req_prefill(r->req) : -1;
+}
+int ds4_bridge_v41_req_progress(ds4_bridge_v41_req *r, int *completed, int *total) {
+    return r && r->req ? ds4_v41_req_prefill_progress(r->req, completed, total) : 0;
+}
+int ds4_bridge_v41_req_next(ds4_bridge_v41_req *r, int *next) {
+    return r && r->req ? ds4_v41_req_next(r->req, next) : 0;
+}
+int ds4_bridge_v41_req_position(ds4_bridge_v41_req *r) {
+    return r && r->req ? ds4_v41_req_position(r->req) : -1;
+}
+ds4_bridge_v41_batch *ds4_bridge_v41_batch_open(ds4_bridge_model *m, int max_rows) {
+    if (!m || !m->engine || max_rows < 2 || max_rows > 16) return NULL;
+    ds4_bridge_v41_batch *b = calloc(1, sizeof *b);
+    if (!b) return NULL;
+    b->model = m; b->batch = ds4_v41_batch_create(m->engine, max_rows);
+    if (!b->batch) { free(b); return NULL; }
+    return b;
+}
+void ds4_bridge_v41_batch_close(ds4_bridge_v41_batch *b) {
+    if (!b) return;
+    ds4_v41_batch_destroy(b->batch);
+    free(b);
+}
+int ds4_bridge_v41_batch_step(ds4_bridge_v41_batch *b,
+    ds4_bridge_v41_req *const *requests, int n, int32_t *next)
+{
+    if (!b || !b->batch || !requests || !next || n < 2 || n > 16) return 1;
+    struct ds4_v41_request *native[16];
+    for (int i = 0; i < n; i++) {
+        if (!requests[i] || requests[i]->model != b->model || !requests[i]->req)
+            return 1;
+        native[i] = requests[i]->req;
+    }
+    return ds4_v41_batch_step(b->batch, native, n, next);
+}
+
 int ds4_bridge_session_argmax(ds4_bridge_session *s)
 {
     if (!s || !s->session) return -1;

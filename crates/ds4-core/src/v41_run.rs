@@ -1714,17 +1714,14 @@ impl<'m> V41BatchRequest<'m> {
         // KV. The native formula covers the 2048-row staging and its
         // transient index scratch; keep the YoungAi 2x headroom rule.
         let estimated = unsafe {
-            ds4_sys::ds4_bridge_v41_prefill_bytes(
-                model.raw_ptr(),
-                prompt.len() as i32,
-            )
-            .saturating_add(ds4_sys::ds4_bridge_v41_images_bytes(
-                if raw_patches.is_empty() {
-                    std::ptr::null()
-                } else {
-                    &image_view
-                },
-            ))
+            ds4_sys::ds4_bridge_v41_prefill_bytes(model.raw_ptr(), prompt.len() as i32)
+                .saturating_add(ds4_sys::ds4_bridge_v41_images_bytes(
+                    if raw_patches.is_empty() {
+                        std::ptr::null()
+                    } else {
+                        &image_view
+                    },
+                ))
         };
         if let Some(free_mb) = mem_available_mb() {
             let need_mb = estimated.saturating_add((1 << 20) - 1) >> 20;

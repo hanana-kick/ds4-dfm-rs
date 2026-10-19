@@ -1565,7 +1565,6 @@ enum EngramMode {
     Off,
 }
 
-
 /// Independent DeepSeek V4.1 KV request: native request owns GPU tensors;
 /// Rust owns Engram history/worker, original prompt and Vision patches.
 /// Do not move these borrowed buffers out before native close.
@@ -1652,7 +1651,9 @@ impl<'m> V41BatchRequest<'m> {
         images: Option<crate::v41_media::V41Images>,
     ) -> Result<Self> {
         if prompt.is_empty() || n_predict < 0 {
-            return Err(asset_error("V4.1 batch requires nonempty prompt and valid output cap"));
+            return Err(asset_error(
+                "V4.1 batch requires nonempty prompt and valid output cap",
+            ));
         }
         if let Some(img) = &images {
             img.validate(&prompt)?;
@@ -1686,8 +1687,12 @@ impl<'m> V41BatchRequest<'m> {
         let image_view = ds4_sys::ds4_bridge_v41_images {
             img: raw_patches.as_ptr(),
             n: raw_patches.len() as i32,
-            row_of: images.as_ref().map_or(std::ptr::null(), |i| i.row_of.as_ptr()),
-            sig_of: images.as_ref().map_or(std::ptr::null(), |i| i.sig_of.as_ptr()),
+            row_of: images
+                .as_ref()
+                .map_or(std::ptr::null(), |i| i.row_of.as_ptr()),
+            sig_of: images
+                .as_ref()
+                .map_or(std::ptr::null(), |i| i.sig_of.as_ptr()),
             np: images.as_ref().map_or(0, |i| i.np),
             n_rows: images.as_ref().map_or(0, |i| i.n_rows),
         };
@@ -1713,12 +1718,32 @@ impl<'m> V41BatchRequest<'m> {
                 prompt.len() as i32,
                 n_predict,
                 &sample,
-                if raw_patches.is_empty() { std::ptr::null() } else { &image_view },
-                if feed.is_some() { Some(v41_batch_rows_tramp) } else { None },
+                if raw_patches.is_empty() {
+                    std::ptr::null()
+                } else {
+                    &image_view
+                },
+                if feed.is_some() {
+                    Some(v41_batch_rows_tramp)
+                } else {
+                    None
+                },
                 fptr,
-                if async_io { Some(v41_batch_wait_tramp) } else { None },
-                if async_io { Some(v41_batch_next_tramp) } else { None },
-                if feed.is_some() { Some(v41_batch_drain_tramp) } else { None },
+                if async_io {
+                    Some(v41_batch_wait_tramp)
+                } else {
+                    None
+                },
+                if async_io {
+                    Some(v41_batch_next_tramp)
+                } else {
+                    None
+                },
+                if feed.is_some() {
+                    Some(v41_batch_drain_tramp)
+                } else {
+                    None
+                },
                 err.as_mut_ptr(),
                 err.len(),
             )
@@ -1763,9 +1788,8 @@ impl<'m> V41BatchRequest<'m> {
     pub fn progress(&self) -> Option<(i32, i32)> {
         let mut done = 0;
         let mut total = 0;
-        if unsafe {
-            ds4_sys::ds4_bridge_v41_req_progress(self.raw.as_ptr(), &mut done, &mut total)
-        } != 1
+        if unsafe { ds4_sys::ds4_bridge_v41_req_progress(self.raw.as_ptr(), &mut done, &mut total) }
+            != 1
         {
             return None;
         }
@@ -1793,8 +1817,7 @@ impl<'m> V41Batch<'m> {
         if !(1..=16).contains(&max_rows) {
             return Err(asset_error("V4.1 native batch width must be 1..16"));
         }
-        let ptr =
-            unsafe { ds4_sys::ds4_bridge_v41_batch_open(model.raw_ptr(), max_rows as i32) };
+        let ptr = unsafe { ds4_sys::ds4_bridge_v41_batch_open(model.raw_ptr(), max_rows as i32) };
         let raw = std::ptr::NonNull::new(ptr)
             .ok_or_else(|| asset_error("V4.1 native batch allocation failed"))?;
         // Prefix reuse's serial-global checkpoint is never consumed by this
@@ -1812,7 +1835,9 @@ impl<'m> V41Batch<'m> {
             return Err(asset_error("V4.1 batch exceeds its row capacity"));
         }
         if requests.iter().any(|r| !std::ptr::eq(r._model, self.model)) {
-            return Err(asset_error("V4.1 batch contains a request from another model"));
+            return Err(asset_error(
+                "V4.1 batch contains a request from another model",
+            ));
         }
         let raw_requests: Vec<_> = requests.iter_mut().map(|r| r.raw.as_ptr()).collect();
         let mut output = vec![0i32; requests.len()];
@@ -1825,7 +1850,9 @@ impl<'m> V41Batch<'m> {
             )
         };
         if rc != 0 {
-            return Err(asset_error("V4.1 native multi-row Forward failed; requests invalidated"));
+            return Err(asset_error(
+                "V4.1 native multi-row Forward failed; requests invalidated",
+            ));
         }
         Ok(output)
     }

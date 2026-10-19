@@ -86,25 +86,6 @@ typedef struct {
     int (*prefetch_next)(uint32_t pos0, const int *tokens, int n, void *ud);
 } ds41_engram_feed;
 
-/* V4.1 request-local prefill + multi-sequence target decode. The native
- * multi-FP path intentionally owns no HTTP protocols or Rust state. */
-struct ds4_v41_request;
-struct ds4_v41_batch;
-struct ds4_v41_request *ds4_v41_req_create(void *engine, const int32_t *prompt,
-                                             int n_prompt, int n_predict,
-                                             const ds4_decode_sampling *sampling,
-                                             const ds41_engram_feed *feed,
-                                             struct ds4_v41_images *images);
-void ds4_v41_req_destroy(struct ds4_v41_request *r);
-int ds4_v41_req_prefill(struct ds4_v41_request *r);
-int ds4_v41_req_next(const struct ds4_v41_request *r, int *out);
-int ds4_v41_req_position(const struct ds4_v41_request *r);
-int ds4_v41_req_prefill_progress(const struct ds4_v41_request *r, int *completed, int *total);
-struct ds4_v41_batch *ds4_v41_batch_create(void *engine, int rows);
-void ds4_v41_batch_destroy(struct ds4_v41_batch *b);
-int ds4_v41_batch_step(struct ds4_v41_batch *b,
-                        struct ds4_v41_request *const *requests, int n, int32_t *next);
-
 /* Teacher-forced scoring of `ids` through an opened V4.1 engine.  Writes the
  * logits file to out_path and prints the segment PPL; returns 0 on success.
  * no_engram skips the engram layers (the compare-only mode); when the model
@@ -268,6 +249,27 @@ typedef struct {
     float dry_multiplier, dry_base; int dry_allowed_length;
     ds4_greedy_fn greedy_fn; void *greedy_ud;
 } ds4_decode_sampling;
+
+/* V4.1 request-local prefill + multi-sequence target decode. The native
+ * multi-FP path intentionally owns no HTTP protocols or Rust state. */
+struct ds4_v41_request;
+struct ds4_v41_batch;
+struct ds4_v41_request *ds4_v41_req_create(void *engine, const int32_t *prompt,
+                                             int n_prompt, int n_predict,
+                                             const ds4_decode_sampling *sampling,
+                                             const ds41_engram_feed *feed,
+                                             struct ds4_v41_images *images);
+void ds4_v41_req_destroy(struct ds4_v41_request *r);
+int ds4_v41_req_prefill(struct ds4_v41_request *r);
+int ds4_v41_req_next(const struct ds4_v41_request *r, int *out);
+int ds4_v41_req_position(const struct ds4_v41_request *r);
+int ds4_v41_req_prefill_progress(const struct ds4_v41_request *r, int *completed, int *total);
+struct ds4_v41_batch *ds4_v41_batch_create(void *engine, int rows);
+void ds4_v41_batch_destroy(struct ds4_v41_batch *b);
+int ds4_v41_batch_step(struct ds4_v41_batch *b,
+                        struct ds4_v41_request *const *requests, int n, int32_t *next);
+
+
 void ds4_engine_set_decode_sampling(const ds4_decode_sampling *sp);
 
 /* The penalty route's generated-token history (the engine's v41_hist,

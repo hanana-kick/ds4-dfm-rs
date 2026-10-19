@@ -248,7 +248,12 @@ struct FeedKey {
 /// depend on the prompt.  The engine keeps this for the life of its state.
 #[derive(Clone)]
 struct EngramAssets {
-    core: Arc<Mutex<FeedCore>>,
+    hash: Arc<EngramHash>,
+    shards: Vec<Arc<EngramShard>>,
+    weight_off: Vec<u64>,
+    scale_off: Vec<u64>,
+    rows: Vec<u64>,
+    head_dim: u32,
     has_ring: bool,
     ring_cap: u32,
     cols: u32,
@@ -276,10 +281,17 @@ pub(crate) fn clear_setup_cache() {
 }
 
 impl EngramAssets {
-    /// Take a built feed's asset half, for the cache.
+    /// Cache only immutable shard handles/hash constants. Each active request
+    /// must own its own history, image mask, io_uring and prefetch worker.
     fn of(feed: &V41Feed) -> Self {
+        let core = feed.core.lock().unwrap();
         Self {
-            core: Arc::clone(&feed.core),
+            hash: Arc::clone(&core.hash),
+            shards: core.shards.clone(),
+            weight_off: core.weight_off.clone(),
+            scale_off: core.scale_off.clone(),
+            rows: core.rows.clone(),
+            head_dim: core.head_dim,
             has_ring: feed.has_ring,
             ring_cap: feed.ring_cap,
             cols: feed.cols,
@@ -402,12 +414,30 @@ impl V41Feed {
     /// clearing here is that same reset.  The shadow prefetch buffer is kept:
     /// it is overwritten before any read (its own comment above).
     fn from_assets(a: EngramAssets) -> Self {
-        {
-            let mut core = a.core.lock().unwrap();
-            core.hist.clear();
-            core.image_mask.clear();
-        }
-        let mut async_on = a.has_ring && std::env::var_os("DS41_FEED_SYNC").is_none();
+        // The cached shard FDs and hash tables are immutable. Mutable history,
+        // image signatures, ring operations and async worker are request-local.
+        let ring = if a.has_ring {
+            crate::uring::Ring::open(crate::uring::ERING_CAP)
+        } else {
+            None
+        };
+        let has_ring = ring.is_some();
+        let ring_cap = ring.as_ref().map_or(0, |r| r.cap());
+        let core = Arc::new(Mutex::new(FeedCore {
+            ring,
+            hash: a.hash,
+            shards: a.shards,
+            weight_off: a.weight_off,
+            scale_off: a.scale_off,
+            rows: a.rows,
+            head_dim: a.head_dim,
+            cols: a.cols,
+            stride: a.stride,
+            hist: Vec::new(),
+            image_mask: Vec::new(),
+            shadow: Vec::new(),
+        }));
+        let mut async_on = has_ring && std::env::var_os("DS41_FEED_SYNC").is_none();
         let ctl = Arc::new((
             Mutex::new(Ctl {
                 go: false,
@@ -422,7 +452,7 @@ impl V41Feed {
             let spawned = std::thread::Builder::new()
                 .name("ds41-engram-fetch".into())
                 .spawn({
-                    let core = Arc::clone(&a.core);
+                    let core = Arc::clone(&core);
                     let ctl = Arc::clone(&ctl);
                     move || worker_loop(core, ctl, rx)
                 });
@@ -460,12 +490,12 @@ impl V41Feed {
             eprintln!("ds4: [v41] engram cross-block prefetch off (DS41_FEED_NO_PREFETCH)");
         }
         Self {
-            core: a.core,
+            core,
             worker,
             ctl,
             async_on,
-            has_ring: a.has_ring,
-            ring_cap: a.ring_cap,
+            has_ring,
+            ring_cap,
             cols: a.cols,
             stride: a.stride,
             n_layers: a.n_layers,
@@ -537,8 +567,8 @@ impl V41Feed {
         let cols = (wire.engram_max_ngram - 1) * wire.engram_heads;
         let core = Arc::new(Mutex::new(FeedCore {
             ring,
-            hash,
-            shards,
+            hash: Arc::new(hash),
+            shards: shards.into_iter().map(Arc::new).collect(),
             weight_off: wire.engram_weight_off.clone(),
             scale_off: wire.engram_scale_off.clone(),
             rows: wire.engram_rows.clone(),
@@ -1005,8 +1035,8 @@ impl V41Feed {
 /// so both may hold the type and never the ring at once.
 struct FeedCore {
     ring: Option<crate::uring::Ring>,
-    hash: EngramHash,
-    shards: Vec<EngramShard>,
+    hash: Arc<EngramHash>,
+    shards: Vec<Arc<EngramShard>>,
     weight_off: Vec<u64>,
     scale_off: Vec<u64>,
     rows: Vec<u64>,
@@ -2190,7 +2220,7 @@ mod tests {
             let model = drop_fixture(&dir.join("tiny.gguf"));
             let core = Arc::new(Mutex::new(FeedCore {
                 ring: None,
-                hash: EngramHash {
+                hash: Arc::new(EngramHash {
                     token_map: Vec::new(),
                     multipliers: Vec::new(),
                     primes: Vec::new(),
@@ -2199,7 +2229,7 @@ mod tests {
                     heads: 1,
                     pad: 0,
                     n_vocab: 0,
-                },
+                }),
                 shards: Vec::new(),
                 weight_off: Vec::new(),
                 scale_off: Vec::new(),
@@ -2211,14 +2241,20 @@ mod tests {
                 image_mask: Vec::new(),
                 shadow: Vec::new(),
             }));
-            let weak = Arc::downgrade(&core);
+            let hash = Arc::clone(&core.lock().unwrap().hash);
+            let weak = Arc::downgrade(&hash);
             *ENGRAM_FEED.lock().unwrap() = Some((
                 FeedKey {
                     gguf: "old-model.gguf".into(),
                     engram_dir: None,
                 },
                 EngramAssets {
-                    core,
+                    hash: Arc::clone(&hash),
+                    shards: Vec::new(),
+                    weight_off: Vec::new(),
+                    scale_off: Vec::new(),
+                    rows: Vec::new(),
+                    head_dim: 0,
                     has_ring: false,
                     ring_cap: 0,
                     cols: 0,
@@ -2227,6 +2263,8 @@ mod tests {
                     sources: Vec::new(),
                 },
             ));
+            drop(hash);
+            drop(core);
             *ZCHAIN_MOUNTED.lock().unwrap() = Some((
                 MountKey {
                     model: model.raw_ptr() as usize,
@@ -2247,6 +2285,47 @@ mod tests {
             );
         }
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn cached_engram_assets_have_independent_request_history() {
+        let hash = Arc::new(EngramHash {
+            token_map: Vec::new(),
+            multipliers: Vec::new(),
+            primes: Vec::new(),
+            offsets: Vec::new(),
+            max_ngram: 2,
+            heads: 1,
+            pad: 0,
+            n_vocab: 0,
+        });
+        let assets = EngramAssets {
+            hash,
+            shards: Vec::new(),
+            weight_off: Vec::new(),
+            scale_off: Vec::new(),
+            rows: Vec::new(),
+            head_dim: 0,
+            has_ring: false,
+            ring_cap: 0,
+            cols: 0,
+            stride: 0,
+            n_layers: 0,
+            sources: Vec::new(),
+        };
+        let mut first = V41Feed::from_assets(assets.clone());
+        let mut second = V41Feed::from_assets(assets);
+        first.seed_prefix(&[101, 202, 303]);
+        second.seed_prefix(&[7, 8]);
+        first.core.lock().unwrap().image_mask.push(1);
+        let c1 = first.core.lock().unwrap();
+        let c2 = second.core.lock().unwrap();
+        assert_eq!(c1.hist, [101, 202, 303]);
+        assert_eq!(c2.hist, [7, 8]);
+        assert_eq!(c1.image_mask, [1]);
+        assert!(c2.image_mask.is_empty());
+        assert!(Arc::ptr_eq(&c1.hash, &c2.hash));
+        assert!(!Arc::ptr_eq(&first.core, &second.core));
     }
 
     fn mount_fixture(dir: &Path) -> Model {

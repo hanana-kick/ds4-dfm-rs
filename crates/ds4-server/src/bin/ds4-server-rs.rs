@@ -491,6 +491,27 @@ fn main() {
         false,
     );
     let plan = resolve_plan(&serve_req, caps, &facts);
+    // The experimental V4.1 multi-request engine currently implements
+    // independent-KV pure decode only. A forced width must not silently run
+    // the serial speculative route, or restore its process-global checkpoint.
+    let v41_batch_requested = plan.effective.max_seqs > 1
+        && ident
+            .as_ref()
+            .is_some_and(|id| id.shape.variant == ds4_core::Variant::DeepSeek41Flash)
+        && std::env::var("DS41_EXPERIMENTAL_BATCH").is_ok_and(|v| {
+            matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
+        });
+    if v41_batch_requested {
+        if plan.effective.mtp_mode != MtpMode::Off {
+            cli_error("V4.1 batch MTP is not qualified: use --mtp-mode off with --max-seqs > 1");
+        }
+        if plan.effective.prefix_reuse != ds4_core::ReuseKind::None {
+            cli_error("V4.1 batch prefix reuse is not implemented: use --prefix-reuse off");
+        }
+        if serve_req.kv_disk_dir.is_some() {
+            cli_error("V4.1 batch disk-KV reuse is not implemented; remove --kv-disk-dir");
+        }
+    }
     plan.apply_env();
     cfg.adopt_plan(&plan);
     eprint!("{}", plan.report());
@@ -529,6 +550,9 @@ fn main() {
         } else {
             plan.effective.max_seqs as i32
         };
+    if v41_batch_requested && cont_width == 0 {
+        cli_error("V4.1 batch requested, but the serving plan selected a serial runtime");
+    }
 
     let native_dist = distributed_config(&dist.opt);
     // Snapshot every artifact before native open, then recheck before enabling

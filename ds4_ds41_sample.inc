@@ -172,7 +172,7 @@ static uint8_t *ds4_decode_breakers(ds4_engine *e, uint32_t n_vocab) {
  * draft is not accepted (or at the last row).  argmax (temperature 0) never
  * asks: its pick is already [0]. */
 static void v41_sample_pick(ds4_v41_state *st, const int32_t *slot, const int32_t *batch, uint32_t n, int32_t *want) {
-    const ds4_decode_sampling *sp = &g_decode_sampling;
+    const ds4_decode_sampling *sp = st->psamp ? st->psamp : &g_decode_sampling;
     bool ask = st->dev_sample && sp->greedy_fn;
     for (uint32_t i = 0; i < n; i++) {
         const int32_t *s = slot + 4u * i;
@@ -207,13 +207,12 @@ static bool v41_device_next(ds4_v41_state *st, ds4_gpu_tensor *am, uint32_t row0
 /* The host penalty route (core_v41_sample.c:39-54): read the row back, apply
  * the history penalties, hand it to the V4 sampler.  rowbuf non-NULL = this
  * request takes the route (any penalty non-zero).  The engine reads the
- * per-request face from st->psamp when the batch path set one
- * (core_v41.h:251); the port has no batch path, so the global face is the
- * only source.  At temperature 0 the sampler yields argmax -- the "read back,
+ * per-request face from st->psamp, falling back to the global one-shot
+ * face for the legacy serial path. At temperature 0 sampling yields argmax.
  * penalize, argmax" route the header describes. */
 static bool v41_next_token(ds4_v41_state *st, ds4_gpu_tensor *am, uint32_t row, float *rowbuf, uint64_t *rng, v41_hist *h, int32_t *out) {
     if (!rowbuf) return v41_device_next(st, am, row, 1u, NULL, out);
-    const ds4_decode_sampling *sp = &g_decode_sampling;
+    const ds4_decode_sampling *sp = st->psamp ? st->psamp : &g_decode_sampling;
     if (!ds4_gpu_synchronize() ||
         !ds4_gpu_tensor_read(st->logits, (uint64_t)row * DS4_N_VOCAB * 4u, rowbuf, (uint64_t)DS4_N_VOCAB * 4u)) return false;
     if (h && h->n && (sp->dry_multiplier > 0.f || sp->freq_penalty != 0.f || sp->presence_penalty != 0.f))

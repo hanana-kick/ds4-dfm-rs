@@ -340,6 +340,9 @@ typedef struct {
      * counterpart: there is no batch path. */
     int dev_sample;
     ds4_gpu_sample_params samp;
+    /* Batch lane: each request keeps its own sampling and DSML greedy hook.
+     * NULL retains the existing serial one-shot sampling behavior. */
+    const ds4_decode_sampling *psamp;
     const ds4_gpu_tensor *spec_q;
     /* The block's host token ids, set by v41_forward: the engram feed's
      * prepare callback hashes the block's rows from them (the engine hashes

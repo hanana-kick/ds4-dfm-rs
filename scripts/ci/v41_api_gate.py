@@ -51,7 +51,7 @@ def cases(model, max_tokens=192):
         prompts.append(text_prompts[i])
         if i < 8:
             prompts.append(image_prompts[i])
-    return [
+    cases = [
         {"id": key, "request": {
             "model": model, "temperature": 0,
             "max_tokens": max_tokens, "stream": False,
@@ -59,6 +59,24 @@ def cases(model, max_tokens=192):
         }}
         for key, prompt in prompts
     ]
+    for key, content in [
+        ("s1", "Write sixteen numbered sentences about safe concurrency."),
+        ("s2", "Write sixteen numbered sentences about robust API responses."),
+        ("sv1", [
+            {"type": "text", "text": "Describe the dominant color in sixteen short observations."},
+            {"type": "image_url", "image_url": {"url": red}},
+        ]),
+        ("sv2", [
+            {"type": "text", "text": "Describe the dominant color in sixteen short observations."},
+            {"type": "image_url", "image_url": {"url": blue}},
+        ]),
+    ]:
+        cases.append({"id": key, "request": {
+            "model": model, "temperature": 0,
+            "max_tokens": max_tokens, "stream": True,
+            "messages": [{"role": "user", "content": content}],
+        }})
+    return cases
 
 def request(url,body=None):
     b=json.dumps(body).encode() if body is not None else None
@@ -87,10 +105,46 @@ def normalized(response):
 def digest(body):
     return hashlib.sha256(json.dumps(body,sort_keys=True).encode()).hexdigest()
 
+def parse_sse(lines):
+    """OpenAI chat SSE; ignore heartbeat comments but require the final terminator."""
+    pieces, finish, complete = [], None, False
+    for raw in lines:
+        line = raw.strip()
+        if not line.startswith(b"data:"):
+            continue
+        data = line[5:].strip()
+        if data == b"[DONE]":
+            complete = True
+            break
+        event = json.loads(data)
+        if "error" in event:
+            raise RuntimeError("Streaming inference error: " + str(event["error"]))
+        for choice in event.get("choices") or []:
+            delta = choice.get("delta") or {}
+            if isinstance(delta.get("content"), str):
+                pieces.append(delta["content"])
+            if choice.get("finish_reason") is not None:
+                finish = choice["finish_reason"]
+    if not complete or finish is None:
+        raise RuntimeError("Stream ended before finish_reason and [DONE]")
+    return {"content": "".join(pieces), "tool_calls": [], "finish_reason": finish}
+
+
 def run_one(url,c):
     start=time.perf_counter()
-    r=request(url+"/v1/chat/completions",c["request"])
-    return {"id":c["id"],"output":normalized(r),"ms":round((time.perf_counter()-start)*1000,1),"usage":r.get("usage")}
+    if c["request"]["stream"]:
+        payload=json.dumps(c["request"]).encode()
+        req=Request(url+"/v1/chat/completions",data=payload,
+                    headers={"Content-Type":"application/json"},method="POST")
+        with urlopen(req,timeout=360) as response:
+            output=parse_sse(response)
+        usage=None
+    else:
+        r=request(url+"/v1/chat/completions",c["request"])
+        output=normalized(r)
+        usage=r.get("usage")
+    return {"id":c["id"],"output":output,
+            "ms":round((time.perf_counter()-start)*1000,1),"usage":usage}
 
 def compare(gold,current):
     errors=[]

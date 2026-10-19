@@ -1,0 +1,83 @@
+name: DeepSeek V4.1 continuous inference
+
+on:
+  push:
+    branches:
+      - feat/v41-continuous
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Model-free check or exclusive DGX Spark GPU gate
+        type: choice
+        required: true
+        default: unit
+        options:
+          - unit
+          - gpu-baseline
+          - gpu-batch-2
+          - gpu-batch-4
+          - gpu-batch-8
+          - gpu-batch-16
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v41-ci-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  model-free:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate batch test harness
+        run: |
+          python3 -m compileall -q scripts/ci/v41_api_gate.py
+          python3 -m unittest discover -s scripts/ci -p 'test_v41_*.py' -v
+          bash -n scripts/ci/v41-batch-gpu.sh
+      - name: Rust model-free tests
+        run: |
+          cargo test -p ds4-core --lib v41
+          cargo test -p ds4-server --lib v41
+
+  spark-gpu:
+    needs: model-free
+    if: ${{ github.event_name == 'workflow_dispatch' && startsWith(inputs.mode, 'gpu-') }}
+    runs-on: [self-hosted, linux, ARM64, dgx-spark-v41]
+    timeout-minutes: 120
+    env:
+      CARGO_BUILD_JOBS: '2'
+      MODEL_DIR: /home/hana/AI/ds4-dfm-rs/gguf/DeepSeek-V4.1-Flash-1017
+      RUN_MODE: ${{ inputs.mode }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Assert dedicated runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = aarch64
+          command -v nvcc
+          command -v cargo
+          command -v curl
+          command -v python3
+          nvidia-smi -L
+      - name: Compile DFM native CUDA and Rust server
+        shell: bash
+        run: make -j2 cuda-spark
+      - name: Serial baseline or mixed image/text batch gate
+        shell: bash
+        run: bash scripts/ci/v41-batch-gpu.sh
+      - name: Save test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v41-${{ inputs.mode }}-${{ github.run_id }}
+          path: .artifacts/v41/
+          if-no-files-found: ignore
+          retention-days: 14

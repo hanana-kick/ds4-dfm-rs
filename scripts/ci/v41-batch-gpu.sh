@@ -56,8 +56,27 @@ else
   test -r "$BASELINE" || { echo "Run gpu-baseline first" >&2; exit 2; }
   python3 scripts/ci/v41_api_gate.py --base-url "http://127.0.0.1:$PORT" --concurrency "$N" --compare "$BASELINE" --out "$OUT/batch-$N.json"
   # Proof is actual multi-row GPU dispatch, not merely max-seqs=N in the config.
-  grep -Eq '\[v41-batch\] forward sequences=([2-9]|1[0-6])([[:space:]]|$)' "$OUT/server.log" || {
-    echo "Native multi-sequence Forward was not observed" >&2; exit 1;
-  }
+  # Width=16 must contain a genuine sixteen-row Forward. A server that
+  # advertises max-seqs=16 but only processes pairs cannot pass this gate.
+  python3 - "$OUT/server.log" "$N" "$OUT/native-batch.json" <<'PY'
+import json,re,sys
+log_path, expected, output = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+log = open(log_path, encoding="utf-8", errors="replace").read()
+found = [(int(a),int(b)) for a,b in
+         re.findall(r"\[v41-batch\] forward sequences=(\d+) rows=(\d+)", log)]
+report = {
+    "configured_max_seqs": expected,
+    "total_native_forwards": len(found),
+    "observed_max_seqs": max((a for a,_ in found), default=0),
+    "width_histogram": {str(n): sum(a == n for a,_ in found)
+                        for n in sorted({a for a,_ in found})},
+    "all_rows_match": all(a == b for a,b in found),
+}
+with open(output, "w", encoding="utf-8") as out:
+    json.dump(report, out, indent=2)
+print("Native batch evidence:", json.dumps(report))
+if not report["all_rows_match"] or report["observed_max_seqs"] != expected:
+    sys.exit("Native Forward did not demonstrate the requested batch width")
+PY
 fi
 echo "PASS $RUN_MODE" | tee "$OUT/result.txt"

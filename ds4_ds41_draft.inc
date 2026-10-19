@@ -1046,4 +1046,6 @@ int ds4_v41_generate_argmax(void *engine, const int *prompt, int n_prompt, int n
     return rc;
 }
 
+#include "ds4_ds41_batch.inc"
+
 #endif /* DS4_DS41_DRAFT_INC */

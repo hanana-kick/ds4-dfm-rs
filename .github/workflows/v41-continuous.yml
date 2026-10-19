@@ -44,6 +44,7 @@ jobs:
       - name: Rust model-free tests
         run: |
           cargo test -p ds4-core --lib v41
+          DS41_EXPERIMENTAL_BATCH=1 cargo test -p ds4-core --lib v41_experimental_batch_contract
           cargo test -p ds4-server --lib v41
 
   spark-gpu:

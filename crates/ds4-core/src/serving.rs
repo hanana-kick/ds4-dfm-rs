@@ -3990,6 +3990,35 @@ mod tests {
         assert!(p.issues.iter().any(|i| i.code == "disk_unverified"));
     }
 
+    // Run only with DS41_EXPERIMENTAL_BATCH=1; the ordinary regression
+    // suite leaves that feature off and retains V4.1's serial contract.
+    #[test]
+    fn v41_experimental_batch_contract() {
+        if std::env::var_os("DS41_EXPERIMENTAL_BATCH").is_none() {
+            return;
+        }
+        let caps = serving_caps(ModelFamily::DeepSeek4, Variant::DeepSeek41Flash);
+        assert_eq!(caps.banks, BankLane::OptIn);
+        assert_eq!(caps.bank_support, Support::Present);
+        assert_eq!(caps.reuse, ReuseKind::None);
+        let req = ServingRequest {
+            max_seqs: MaxSeqs::Fixed(2),
+            prefix_reuse: PrefixReuse::Off,
+            mtp_mode: MtpMode::Off,
+            ..ServingRequest::default()
+        };
+        let facts = EngineFacts {
+            banks_fitted: Some(2),
+            cont_lane: Some(true),
+            ..EngineFacts::default()
+        };
+        let p = resolve_plan(&req, Some(caps), &facts);
+        assert!(!p.has_errors(), "{}", p.report());
+        assert_eq!(p.effective.max_seqs, 2);
+        assert_eq!(p.effective.mtp_mode, MtpMode::Off);
+        assert_eq!(p.effective.prefix_reuse, ReuseKind::None);
+    }
+
     #[test]
     fn v41_serving_contract_refuses_what_it_lacks() {
         // The native prompt-end checkpoint is exact reuse; it provides no

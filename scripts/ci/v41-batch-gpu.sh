@@ -7,8 +7,9 @@ ROOT=$PWD; OUT=$ROOT/.artifacts/v41; PORT=18080
 BASELINE=$HOME/.cache/dfm-v41-continuous/serial-baseline.json
 mkdir -p "$OUT" "$(dirname "$BASELINE")"
 case "$RUN_MODE" in
-  gpu-baseline) N=1; MODE=record;;
-  gpu-batch-2|gpu-batch-4|gpu-batch-8|gpu-batch-16) N=$(printf %s "$RUN_MODE"|cut -d- -f3); MODE=compare;;
+  gpu-baseline) N=1; MODE=record; unset DS41_EXPERIMENTAL_BATCH;;
+  gpu-batch-2|gpu-batch-4|gpu-batch-8|gpu-batch-16)
+    N=$(printf %s "$RUN_MODE"|cut -d- -f3); MODE=compare; export DS41_EXPERIMENTAL_BATCH=1;;
   *) echo "Unsupported RUN_MODE=$RUN_MODE" >&2; exit 2;;
 esac
 MODEL=$MODEL_DIR/DeepSeek-V4.1-Flash-vq8sh14-q4k-mtpnative.gguf

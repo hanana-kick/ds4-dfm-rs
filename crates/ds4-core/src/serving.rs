@@ -4037,7 +4037,10 @@ mod tests {
                 ..EngineFacts::default()
             },
         );
-        assert!(too_wide.issues.iter().any(|issue| issue.code == "v41_batch_width"));
+        assert!(too_wide
+            .issues
+            .iter()
+            .any(|issue| issue.code == "v41_batch_width"));
     }
 
     #[test]

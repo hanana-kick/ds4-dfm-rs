@@ -41,6 +41,8 @@ pub mod tool_stream;
 pub mod tools;
 #[cfg(any(feature = "native", test))]
 mod v41_disk;
+#[cfg(feature = "native")]
+pub mod v41_cont;
 pub mod worker;
 #[cfg(feature = "native")]
 pub mod worker_run;
@@ -152,6 +154,8 @@ pub use tools::{
     assign_tool_ids, parse_dsml_tolerant, parse_generated_for_model_id,
     parse_generated_for_response, parse_generated_message, ParsedGenerated, SemAccum, SemFeed,
 };
+#[cfg(feature = "native")]
+pub use v41_cont::V41ContLane;
 pub use worker::{dist_weight_slice, server_launch, ServerLaunch, WORKER_REQUIRES_MODEL};
 #[cfg(feature = "native")]
 pub use worker_run::run_assembled_worker;

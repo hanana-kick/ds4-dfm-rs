@@ -222,7 +222,7 @@ int ds4_v41_req_prefill_progress(const struct ds4_v41_request *r, int *completed
 void ds4_v41_batch_destroy(struct ds4_v41_batch *b);
 struct ds4_v41_batch *ds4_v41_batch_create(void *engine, int rows) {
     ds4_engine *e = (ds4_engine *)engine;
-    if (!e || DS4_MODEL_VARIANT != DS4_VARIANT_V41 || rows < 2 || rows > (int)DS4_V41_MULTI_MAX) return NULL;
+    if (!e || DS4_MODEL_VARIANT != DS4_VARIANT_V41 || rows < 1 || rows > (int)DS4_V41_MULTI_MAX) return NULL;
     ds4_v41_batch *b = (ds4_v41_batch *)calloc(1, sizeof *b);
     if (!b) return NULL;
     b->engine = e; b->cap = (uint32_t)rows;
@@ -295,7 +295,7 @@ static bool v41_batch_body(ds4_v41_batch *b, ds4_v41_request *const *req, int n)
 }
 int ds4_v41_batch_step(struct ds4_v41_batch *b, struct ds4_v41_request *const *r, int n,
                        int32_t *next) {
-    if (!b || !r || !next || n < 2 || (uint32_t)n > b->cap) return 1;
+    if (!b || !r || !next || n < 1 || (uint32_t)n > b->cap) return 1;
     int32_t *ids = (int32_t *)malloc((size_t)n * 4u);
     int32_t *pos = (int32_t *)malloc((size_t)n * 4u);
     v41_batch_views *views = (v41_batch_views *)calloc((size_t)n, sizeof *views);

@@ -1124,7 +1124,7 @@ int ds4_bridge_v41_req_position(ds4_bridge_v41_req *r) {
     return r && r->req ? ds4_v41_req_position(r->req) : -1;
 }
 ds4_bridge_v41_batch *ds4_bridge_v41_batch_open(ds4_bridge_model *m, int max_rows) {
-    if (!m || !m->engine || max_rows < 2 || max_rows > 16) return NULL;
+    if (!m || !m->engine || max_rows < 1 || max_rows > 16) return NULL;
     ds4_bridge_v41_batch *b = calloc(1, sizeof *b);
     if (!b) return NULL;
     b->model = m; b->batch = ds4_v41_batch_create(m->engine, max_rows);
@@ -1139,7 +1139,7 @@ void ds4_bridge_v41_batch_close(ds4_bridge_v41_batch *b) {
 int ds4_bridge_v41_batch_step(ds4_bridge_v41_batch *b,
     ds4_bridge_v41_req *const *requests, int n, int32_t *next)
 {
-    if (!b || !b->batch || !requests || !next || n < 2 || n > 16) return 1;
+    if (!b || !b->batch || !requests || !next || n < 1 || n > 16) return 1;
     struct ds4_v41_request *native[16];
     for (int i = 0; i < n; i++) {
         if (!requests[i] || requests[i]->model != b->model || !requests[i]->req)

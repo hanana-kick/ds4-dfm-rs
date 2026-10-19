@@ -350,7 +350,7 @@ impl ContStepper {
     }
 
     #[cfg(any(feature = "native", test))]
-    fn heartbeat(&mut self, now: Instant) -> Vec<u8> {
+    pub(crate) fn heartbeat(&mut self, now: Instant) -> Vec<u8> {
         stream_heartbeat_if_due(
             &mut self.w,
             &self.req,
@@ -363,7 +363,7 @@ impl ContStepper {
     }
 
     #[cfg(feature = "native")]
-    fn fail(&mut self, message: &str) -> Vec<u8> {
+    pub(crate) fn fail(&mut self, message: &str) -> Vec<u8> {
         if self.req.stream {
             stream_error(&mut self.w, &self.req, self.resp.as_mut(), message);
         }

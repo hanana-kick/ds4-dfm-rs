@@ -10,7 +10,8 @@ class TestV41Gate(unittest.TestCase):
         self.assertEqual(gate.png((255,0,0))[:8],b"\x89PNG\r\n\x1a\n")
     def test_image_identities(self):
         cases=gate.cases("big")
-        self.assertGreaterEqual(len(cases), 28)
+        self.assertGreaterEqual(len(cases), 32)
+        self.assertEqual(sum(c["request"]["stream"] for c in cases), 4)
         self.assertEqual(len(cases), len({case["id"] for case in cases}))
         self.assertGreaterEqual(
             sum(case["id"].startswith("v") for case in cases), 8
@@ -27,6 +28,21 @@ class TestV41Gate(unittest.TestCase):
         self.assertEqual(gate.compare(a,a),[])
         b={**a,"results":[{"id":"x","output":{"content":"other"}}]}
         self.assertEqual(gate.compare(a,b),["Output mismatch: x"])
+    def test_sse_normalization_and_keepalive(self):
+        lines = [
+            b": keepalive\n",
+            b'data: {"choices":[{"delta":{"content":"red"},"finish_reason":null}]}\n',
+            b'data: {"choices":[{"delta":{"content":" color"},"finish_reason":"stop"}]}\n',
+            b'data: [DONE]\n',
+        ]
+        self.assertEqual(gate.parse_sse(lines), {
+            "content": "red color", "tool_calls": [], "finish_reason": "stop"
+        })
+        with self.assertRaises(RuntimeError):
+            gate.parse_sse(lines[:-1])
+        with self.assertRaises(RuntimeError):
+            gate.parse_sse([b'data: {"error":{"message":"GPU failed"}}\n'])
+
     def test_invalid_output(self):
         with self.assertRaises(RuntimeError): gate.normalized({"choices":[]})
 

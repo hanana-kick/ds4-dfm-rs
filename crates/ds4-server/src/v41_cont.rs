@@ -439,6 +439,9 @@ impl<'m> V41ContLane<'m> {
                     let slot = slots.remove(i);
                     let key = slot.work.key;
                     let result = slot.finish();
+                    if let Ok(outcome) = &result {
+                        source.publish(key, outcome);
+                    }
                     source.settled(key, &result);
                     results.push(ContOwnedResult { key, result });
                 } else {

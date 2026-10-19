@@ -218,6 +218,10 @@ int ds4_v41_req_force_token(struct ds4_v41_request *r, int32_t token) {
     if (!r || !r->prefilled || r->failed || token < 0 || (uint32_t)token >= DS4_N_VOCAB)
         return 0;
     r->next = token;
+    /* Penalty sampling accumulates its own emitted-token history. A forced
+     * DSML prefix replaces that emission, not just the next GPU input. */
+    if (r->rowbuf && r->hist.n > 0u && r->hist.tok)
+        r->hist.tok[r->hist.n - 1u] = token;
     return 1;
 }
 int ds4_v41_req_position(const struct ds4_v41_request *r) {

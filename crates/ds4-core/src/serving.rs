@@ -662,12 +662,8 @@ pub fn serving_caps(family: ModelFamily, variant: Variant) -> ServingCaps {
     // Experimental V4.1 native batch is gated independently of the other
     // families' ds4_session-based bank runtime. The user must opt in and
     // explicitly disable MTP and prefix reuse until their batch gates pass.
-    let v41_batch = std::env::var("DS41_EXPERIMENTAL_BATCH").is_ok_and(|v| {
-        matches!(
-            v.to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        )
-    });
+    let v41_batch = std::env::var("DS41_EXPERIMENTAL_BATCH")
+        .is_ok_and(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"));
     // V4.1 has no ds4_session, but its native prompt-end checkpoint provides
     // exact prefix reuse and KVC disk restoration. Common off|exact|auto
     // controls select that checkpoint; partial forks, banks and session

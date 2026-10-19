@@ -300,6 +300,11 @@ impl<'m> V41ContLane<'m> {
         let mut results = Vec::new();
         loop {
             while slots.len() < self.max_rows {
+                // Keep at most one full 2048-row prefill workspace alive.
+                // Other resident requests have already shrunk to KV-only.
+                if slots.iter().any(|s| s.prefilling) {
+                    break;
+                }
                 let Some(work) = source.next(&probe) else {
                     break;
                 };

@@ -673,11 +673,31 @@ pub fn serving_caps(family: ModelFamily, variant: Variant) -> ServingCaps {
         return ServingCaps {
             family,
             variant,
-            banks: if v41_batch { BankLane::OptIn } else { BankLane::Serial },
-            bank_support: if v41_batch { Support::Present } else { Support::None },
-            reuse: if v41_batch { ReuseKind::None } else { ReuseKind::Exact },
-            reuse_support: if v41_batch { Support::None } else { Support::Present },
-            disk: if v41_batch { Support::None } else { Support::Present },
+            banks: if v41_batch {
+                BankLane::OptIn
+            } else {
+                BankLane::Serial
+            },
+            bank_support: if v41_batch {
+                Support::Present
+            } else {
+                Support::None
+            },
+            reuse: if v41_batch {
+                ReuseKind::None
+            } else {
+                ReuseKind::Exact
+            },
+            reuse_support: if v41_batch {
+                Support::None
+            } else {
+                Support::Present
+            },
+            disk: if v41_batch {
+                Support::None
+            } else {
+                Support::Present
+            },
             snapshot: Support::None,
             mtp: MtpKind::Embedded,
             mtp_support: Support::Qualified,

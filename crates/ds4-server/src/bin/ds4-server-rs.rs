@@ -882,7 +882,9 @@ fn main() {
             engine = engine.with_store(store);
         }
         if let Some(max_rows) = v41_batch_width {
-            let route = engine_v41_route_for_batch.as_ref().expect("V4.1 batch must have its route");
+            let route = engine_v41_route_for_batch
+                .as_ref()
+                .expect("V4.1 batch must have its route");
             let mut v41_lane = V41ContLane::new(
                 model,
                 route.model_path.clone(),
@@ -895,7 +897,9 @@ fn main() {
             accept_loop_with_engine_cont(listener, cfg, &mut engine, &mut v41_lane);
         } else {
             match lane {
-                Some(mut lane) => accept_loop_with_engine_cont(listener, cfg, &mut engine, &mut lane),
+                Some(mut lane) => {
+                    accept_loop_with_engine_cont(listener, cfg, &mut engine, &mut lane)
+                }
                 None => accept_loop_with_engine(listener, cfg, &mut engine),
             }
         }

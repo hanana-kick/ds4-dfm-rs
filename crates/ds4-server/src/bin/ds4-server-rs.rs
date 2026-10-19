@@ -885,6 +885,11 @@ fn main() {
             let route = engine_v41_route_for_batch
                 .as_ref()
                 .expect("V4.1 batch must have its route");
+            // The batched Forward currently consumes every Engram layer.
+            // A serial-only no-engram diagnostic must never be ignored.
+            if route.no_engram {
+                cli_error("V4.1 native batch cannot combine with --v41-no-engram");
+            }
             let mut v41_lane = V41ContLane::new(
                 model,
                 route.model_path.clone(),

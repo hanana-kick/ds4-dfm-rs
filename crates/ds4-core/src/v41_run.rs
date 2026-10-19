@@ -1650,9 +1650,9 @@ impl<'m> V41BatchRequest<'m> {
         sampling: V41Sampling,
         images: Option<crate::v41_media::V41Images>,
     ) -> Result<Self> {
-        if prompt.is_empty() || n_predict < 0 {
+        if prompt.is_empty() || n_predict <= 0 {
             return Err(asset_error(
-                "V4.1 batch requires nonempty prompt and valid output cap",
+                "V4.1 batch requires nonempty prompt and positive output cap",
             ));
         }
         if let Some(img) = &images {
@@ -1710,6 +1710,30 @@ impl<'m> V41BatchRequest<'m> {
             greedy_fn: None,
             greedy_ud: std::ptr::null_mut(),
         };
+        // Admit only when a full prefill fits beside existing live decode
+        // KV. The native formula covers the 2048-row staging and its
+        // transient index scratch; keep the YoungAi 2x headroom rule.
+        let estimated = unsafe {
+            ds4_sys::ds4_bridge_v41_prefill_bytes(
+                model.raw_ptr(),
+                prompt.len() as i32,
+            )
+            .saturating_add(ds4_sys::ds4_bridge_v41_images_bytes(
+                if raw_patches.is_empty() {
+                    std::ptr::null()
+                } else {
+                    &image_view
+                },
+            ))
+        };
+        if let Some(free_mb) = mem_available_mb() {
+            let need_mb = estimated.saturating_add((1 << 20) - 1) >> 20;
+            if free_mb >= 0 && (free_mb as u64) < need_mb.saturating_mul(2) {
+                return Err(asset_error(format!(
+                    "V4.1 batch prefill needs {need_mb} MiB (2x admission), {free_mb} MiB free"
+                )));
+            }
+        }
         let mut err = [0i8; 512];
         let raw = unsafe {
             ds4_sys::ds4_bridge_v41_req_open(

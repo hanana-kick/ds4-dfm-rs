@@ -17,25 +17,48 @@ def png(rgb):
     rows=(b"\x00"+bytes(rgb)*112)*112
     return b"\x89PNG\r\n\x1a\n"+chunk(b"IHDR",struct.pack(">IIBBBBB",112,112,8,2,0,0,0))+chunk(b"IDAT",zlib.compress(rows))+chunk(b"IEND",b"")
 
-def cases(model):
+def cases(model, max_tokens=192):
+    """28 stable text/image prompts; c16 can genuinely reach 16 active lanes."""
     def image(rgb):
-        return "data:image/png;base64,"+base64.b64encode(png(rgb)).decode()
-    red=image((238,38,38)); blue=image((20,40,238))
-    prompts=[
-        ("t1","What is a mutex? One sentence."),
-        ("t2","19 multiplied by 17? Digits only."),
-        ("t3","What is HTTP 404? One sentence."),
-        ("t4","What does a database transaction do?"),
-        ("v1",[{"type":"text","text":"Name the image color."},{"type":"image_url","image_url":{"url":red}}]),
-        ("v2",[{"type":"text","text":"Name the image color."},{"type":"image_url","image_url":{"url":blue}}]),
-        ("t5","What is a database index?"),
-        ("v3",[{"type":"text","text":"Describe the color."},{"type":"image_url","image_url":{"url":red}}]),
-        ("t6","Explain JSON."),
-        ("v4",[{"type":"text","text":"Describe the color."},{"type":"image_url","image_url":{"url":blue}}]),
-        ("t7","What is a REST API?"),
-        ("t8","How many hours are in a week?")
+        return "data:image/png;base64," + base64.b64encode(png(rgb)).decode()
+    red, blue = image((238, 38, 38)), image((20, 40, 238))
+    topics = [
+        "concurrency in Rust", "HTTP request routing", "SQLite transactions",
+        "JSON parsing", "async programming", "data structures", "API versioning",
+        "database indexes", "memory safety", "network latency", "CI testing",
+        "GPU inference batching", "error handling", "tokenization",
+        "cache invalidation", "structured tool calling", "context windows",
+        "garbage collection", "streaming responses", "scheduler fairness",
     ]
-    return [{"id":k,"request":{"model":model,"temperature":0,"max_tokens":64,"stream":False,"messages":[{"role":"user","content":p}]}} for k,p in prompts]
+    text_prompts = [
+        (f"t{i+1}", "Write sixteen separately numbered short sentences about "
+         f"{topic}. Every sentence must mention a different specific detail.")
+        for i, topic in enumerate(topics)
+    ]
+    image_prompts = [
+        (f"v{i+1}", [
+            {"type": "text", "text":
+                "Identify the dominant color, then write twelve numbered "
+                "short observations describing that color. Do not guess objects."},
+            {"type": "image_url", "image_url": {"url": red if i % 2 == 0 else blue}},
+        ])
+        for i in range(8)
+    ]
+    # Keep vision arrivals interleaved with text. Image-only batches do not
+    # prove that image-conditioned KV can share a text decode Forward.
+    prompts = []
+    for i in range(20):
+        prompts.append(text_prompts[i])
+        if i < 8:
+            prompts.append(image_prompts[i])
+    return [
+        {"id": key, "request": {
+            "model": model, "temperature": 0,
+            "max_tokens": max_tokens, "stream": False,
+            "messages": [{"role": "user", "content": prompt}],
+        }}
+        for key, prompt in prompts
+    ]
 
 def request(url,body=None):
     b=json.dumps(body).encode() if body is not None else None
@@ -84,6 +107,7 @@ def main():
     p.add_argument("--base-url",default="http://127.0.0.1:18080")
     p.add_argument("--model",default="big")
     p.add_argument("--concurrency",type=int,default=1)
+    p.add_argument("--max-tokens",type=int,default=192)
     p.add_argument("--out",type=Path,required=True)
     mode=p.add_mutually_exclusive_group(required=True)
     mode.add_argument("--record",action="store_true")
@@ -91,20 +115,26 @@ def main():
     a=p.parse_args()
     if not 1<=a.concurrency<=16 or (a.record and a.concurrency!=1):
         p.error("Record requires c1; valid concurrency 1..16")
+    if not 1 <= a.max_tokens <= 2048:
+        p.error("--max-tokens must be 1..2048")
     url=a.base_url.rstrip("/")
     models=request(url+"/v1/models")
     if a.model not in [m.get("id") for m in models.get("data",[])]:
         raise RuntimeError("Model not exposed by /v1/models")
-    scenarios=cases(a.model)
+    scenarios=cases(a.model, a.max_tokens)
     start=time.perf_counter()
     with ThreadPoolExecutor(max_workers=a.concurrency) as pool:
         results=list(pool.map(lambda c:run_one(url,c),scenarios))
     elapsed=time.perf_counter()-start
-    report={"schema":"dfm-v41-parity/1","model":a.model,"concurrency":a.concurrency,"elapsed_s":round(elapsed,3),"hashes":{c["id"]:digest(c["request"]) for c in scenarios},"results":results}
+    total_tokens=sum((row.get("usage") or {}).get("completion_tokens") or 0 for row in results)
+    report={"schema":"dfm-v41-parity/1","model":a.model,"concurrency":a.concurrency,"elapsed_s":round(elapsed,3),
+            "completion_tokens_reported":total_tokens,
+            "aggregate_toks_per_s":round(total_tokens/elapsed,2) if elapsed else None,
+            "hashes":{c["id"]:digest(c["request"]) for c in scenarios},"results":results}
     a.out.parent.mkdir(parents=True,exist_ok=True)
     a.out.write_text(json.dumps(report,indent=2,ensure_ascii=False)+"\n")
     errors=compare(json.loads(a.compare.read_text()),report) if a.compare else []
-    print("Results:",a.out,"elapsed:",round(elapsed,2),"mismatches:",errors)
+    print("Results:",a.out,"scenarios:",len(scenarios),"elapsed:",round(elapsed,2),"tokens:",total_tokens,"mismatches:",errors)
     return 1 if errors else 0
 
 if __name__=="__main__":

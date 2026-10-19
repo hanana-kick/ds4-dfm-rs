@@ -22,7 +22,7 @@ use crate::render::syntax_for_model_id;
 use crate::serve_cont::{
     ContExec, ContOwnedResult, ContOwnedWork, ContProbe, ContSource, ContStepper,
 };
-use crate::stream::ReqTimings;
+use crate::stream::{stream_error, stream_heartbeat_if_due, ReqTimings, Writer};
 
 /// The native context is request-bounded; this owner has one shared dense
 /// Forward slab and retains individual compressed KV for every admitted job.
@@ -116,6 +116,7 @@ struct Slot<'m> {
     error: Option<GenerateError>,
     t_admit: Instant,
     t_first: Option<Instant>,
+    last_heartbeat: Instant,
     decoded_steps: i32,
     prompt_n: i32,
 }
@@ -127,6 +128,28 @@ impl Slot<'_> {
                 self.io_failed = true;
                 self.done = true;
             }
+        }
+    }
+
+    fn heartbeat(&mut self) {
+        if self.done {
+            return;
+        }
+        let mut writer = Writer::new(self.work.created);
+        let _ = stream_heartbeat_if_due(
+            &mut writer,
+            &self.stepper.req,
+            None,
+            &mut self.last_heartbeat,
+            Instant::now(),
+            ": prefill\n\n",
+        );
+        self.push(&writer.out);
+        // Flush even if no heartbeat is due: client disconnects during long
+        // prefill must not retain a V4.1 KV state indefinitely.
+        if !self.io_failed && self.work.out.flush().is_err() {
+            self.io_failed = true;
+            self.done = true;
         }
     }
 
@@ -158,6 +181,7 @@ impl Slot<'_> {
         }
         let event = self.stepper.feed(&vocab.token_text(token));
         self.push(&event.bytes);
+        self.last_heartbeat = Instant::now();
         if event.done {
             self.done = true;
         }
@@ -171,6 +195,17 @@ impl Slot<'_> {
             return Err(GenerateError::Io);
         }
         if let Some(error) = self.error {
+            if self.stepper.req.stream {
+                let message = error.to_string();
+                let mut writer = Writer::new(self.work.created);
+                stream_error(&mut writer, &self.stepper.req, None, &message);
+                self.work
+                    .out
+                    .write_all(&writer.out)
+                    .map_err(|_| GenerateError::Io)?;
+                self.work.out.flush().map_err(|_| GenerateError::Io)?;
+                return Err(GenerateError::Streamed(message));
+            }
             return Err(error);
         }
         let mut timings = ReqTimings {
@@ -333,6 +368,7 @@ impl<'m> V41ContLane<'m> {
             error: None,
             t_admit,
             t_first: None,
+            last_heartbeat: Instant::now(),
             decoded_steps: 0,
             prompt_n: count,
         };
@@ -402,6 +438,11 @@ impl<'m> V41ContLane<'m> {
                         slot.done = true;
                     }
                 }
+            }
+            // Prefill can run without output for many seconds. Keep SSE
+            // streams alive and retire disconnected clients before decode.
+            for slot in &mut slots {
+                slot.heartbeat();
             }
             // Shared GPU Forward: all ready requests contribute one row,
             // regardless of whether their original prompts contained images.

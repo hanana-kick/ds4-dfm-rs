@@ -86,11 +86,7 @@ struct GreedyContext {
     vocab: *const Vocab,
 }
 
-unsafe extern "C" fn v41_greedy_cb(
-    ud: *mut c_void,
-    ahead: *const i32,
-    n: u32,
-) -> i32 {
+unsafe extern "C" fn v41_greedy_cb(ud: *mut c_void, ahead: *const i32, n: u32) -> i32 {
     if ud.is_null() || (n > 0 && ahead.is_null()) || n > 16 {
         return 0;
     }

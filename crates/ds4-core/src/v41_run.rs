@@ -1806,7 +1806,9 @@ impl<'m> V41BatchRequest<'m> {
 
     pub fn force_token(&mut self, token: i32) -> Result<()> {
         if unsafe { ds4_sys::ds4_bridge_v41_req_force_token(self.raw.as_ptr(), token) } != 1 {
-            return Err(asset_error("V4.1 cannot override this request's next token"));
+            return Err(asset_error(
+                "V4.1 cannot override this request's next token",
+            ));
         }
         Ok(())
     }

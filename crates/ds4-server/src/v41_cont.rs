@@ -57,9 +57,9 @@ impl ContProbe for V41Probe<'_> {
             self.vocab.chat_system_token(),
         )?;
         let tokens = match parsed.kind {
-            crate::route::ReqKind::Completion => {
-                self.vocab.encode_text(std::str::from_utf8(&prompt).unwrap_or(""))
-            }
+            crate::route::ReqKind::Completion => self
+                .vocab
+                .encode_text(std::str::from_utf8(&prompt).unwrap_or("")),
             crate::route::ReqKind::Chat => self.vocab.encode_rendered_bytes(&prompt),
         };
         Ok((prompt, tokens))
@@ -141,10 +141,13 @@ impl Slot<'_> {
             timings.ttft_ms = first.duration_since(self.work.t_arrive).as_secs_f64() * 1e3;
             timings.prefill_ms = first.duration_since(self.t_admit).as_secs_f64() * 1e3;
         }
-        let (tail, outcome) = self
-            .stepper
-            .finalize(self.engine_eos, 0, self.prompt_n, timings, self.work.cors);
-        self.work.out.write_all(&tail).map_err(|_| GenerateError::Io)?;
+        let (tail, outcome) =
+            self.stepper
+                .finalize(self.engine_eos, 0, self.prompt_n, timings, self.work.cors);
+        self.work
+            .out
+            .write_all(&tail)
+            .map_err(|_| GenerateError::Io)?;
         self.work.out.flush().map_err(|_| GenerateError::Io)?;
         Ok(outcome)
     }
@@ -159,8 +162,8 @@ impl<'m> V41ContLane<'m> {
         max_rows: usize,
         vision: Option<V41VisionMeta>,
     ) -> Result<Self, GenerateError> {
-        let batch = V41Batch::open(model, max_rows)
-            .map_err(|e| GenerateError::Engine(e.to_string()))?;
+        let batch =
+            V41Batch::open(model, max_rows).map_err(|e| GenerateError::Engine(e.to_string()))?;
         Ok(Self {
             model,
             vocab: model.vocab(),
@@ -177,7 +180,12 @@ impl<'m> V41ContLane<'m> {
     fn admit(&self, work: ContOwnedWork) -> Result<Slot<'m>, (ContOwnedWork, GenerateError)> {
         let prompt = match &work.prepared {
             Some(p) => (p.prompt.clone(), p.tokens.clone()),
-            None => return Err((work, GenerateError::Unsupported("missing prepared V4.1 prompt"))),
+            None => {
+                return Err((
+                    work,
+                    GenerateError::Unsupported("missing prepared V4.1 prompt"),
+                ))
+            }
         };
         let mut images = None;
         if !work.parsed.images.is_empty() {
@@ -205,10 +213,15 @@ impl<'m> V41ContLane<'m> {
                 }
             }
         }
-        let tokens = images.as_ref().map_or(prompt.1.clone(), |i| i.tokens.clone());
+        let tokens = images
+            .as_ref()
+            .map_or(prompt.1.clone(), |i| i.tokens.clone());
         let count = tokens.len() as i32;
         if count >= self.ctx || count <= 0 {
-            return Err((work, GenerateError::BadRequest("V4.1 prompt exceeds context")));
+            return Err((
+                work,
+                GenerateError::BadRequest("V4.1 prompt exceeds context"),
+            ));
         }
         let sampling = V41Sampling {
             temperature: work.parsed.temperature,
@@ -223,7 +236,11 @@ impl<'m> V41ContLane<'m> {
             } else {
                 0.0
             },
-            dry_base: if work.parsed.dry_set { work.parsed.dry_base } else { 1.75 },
+            dry_base: if work.parsed.dry_set {
+                work.parsed.dry_base
+            } else {
+                1.75
+            },
             dry_allowed_length: if work.parsed.dry_set {
                 work.parsed.dry_allowed_length
             } else {
@@ -283,7 +300,9 @@ impl<'m> V41ContLane<'m> {
         let mut results = Vec::new();
         loop {
             while slots.len() < self.max_rows {
-                let Some(work) = source.next(&probe) else { break };
+                let Some(work) = source.next(&probe) else {
+                    break;
+                };
                 match self.admit(work) {
                     Ok(slot) => slots.push(slot),
                     Err((mut work, error)) => {

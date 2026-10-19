@@ -39,10 +39,10 @@ pub mod stream;
 mod tool_memory;
 pub mod tool_stream;
 pub mod tools;
-#[cfg(any(feature = "native", test))]
-mod v41_disk;
 #[cfg(feature = "native")]
 pub mod v41_cont;
+#[cfg(any(feature = "native", test))]
+mod v41_disk;
 pub mod worker;
 #[cfg(feature = "native")]
 pub mod worker_run;

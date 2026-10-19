@@ -1120,6 +1120,9 @@ int ds4_bridge_v41_req_progress(ds4_bridge_v41_req *r, int *completed, int *tota
 int ds4_bridge_v41_req_next(ds4_bridge_v41_req *r, int *next) {
     return r && r->req ? ds4_v41_req_next(r->req, next) : 0;
 }
+int ds4_bridge_v41_req_force_token(ds4_bridge_v41_req *r, int32_t token) {
+    return r && r->req ? ds4_v41_req_force_token(r->req, token) : 0;
+}
 int ds4_bridge_v41_req_position(ds4_bridge_v41_req *r) {
     return r && r->req ? ds4_v41_req_position(r->req) : -1;
 }

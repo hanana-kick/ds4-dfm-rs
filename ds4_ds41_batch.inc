@@ -212,6 +212,14 @@ int ds4_v41_req_next(const struct ds4_v41_request *r, int *out) {
     if (!r || !out || !r->prefilled || r->failed) return 0;
     *out = r->next; return 1;
 }
+/* Override the not-yet-committed output token (required DSML/tool prefix).
+ * The next Forward consumes the same token that the HTTP host emitted. */
+int ds4_v41_req_force_token(struct ds4_v41_request *r, int32_t token) {
+    if (!r || !r->prefilled || r->failed || token < 0 || (uint32_t)token >= DS4_N_VOCAB)
+        return 0;
+    r->next = token;
+    return 1;
+}
 int ds4_v41_req_position(const struct ds4_v41_request *r) {
     return r && r->prefilled && !r->failed ? (int)r->st.n_past : -1;
 }

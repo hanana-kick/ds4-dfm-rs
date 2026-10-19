@@ -1649,6 +1649,8 @@ impl<'m> V41BatchRequest<'m> {
         n_predict: i32,
         sampling: V41Sampling,
         images: Option<crate::v41_media::V41Images>,
+        greedy: ds4_sys::ds4_bridge_v41_greedy_fn,
+        greedy_ud: *mut c_void,
     ) -> Result<Self> {
         if prompt.is_empty() || n_predict <= 0 {
             return Err(asset_error(
@@ -1707,8 +1709,8 @@ impl<'m> V41BatchRequest<'m> {
             dry_multiplier: sampling.dry_multiplier,
             dry_base: sampling.dry_base,
             dry_allowed_length: sampling.dry_allowed_length,
-            greedy_fn: None,
-            greedy_ud: std::ptr::null_mut(),
+            greedy_fn: greedy,
+            greedy_ud,
         };
         // Admit only when a full prefill fits beside existing live decode
         // KV. The native formula covers the 2048-row staging and its
@@ -1800,6 +1802,13 @@ impl<'m> V41BatchRequest<'m> {
             return Err(asset_error("V4.1 request has no available next token"));
         }
         Ok(token)
+    }
+
+    pub fn force_token(&mut self, token: i32) -> Result<()> {
+        if unsafe { ds4_sys::ds4_bridge_v41_req_force_token(self.raw.as_ptr(), token) } != 1 {
+            return Err(asset_error("V4.1 cannot override this request's next token"));
+        }
+        Ok(())
     }
 
     pub fn position(&self) -> i32 {

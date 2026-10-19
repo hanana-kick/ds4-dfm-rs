@@ -423,6 +423,7 @@ int ds4_bridge_v41_req_prefill(ds4_bridge_v41_req *r);
 int ds4_bridge_v41_req_progress(ds4_bridge_v41_req *r, int *completed, int *total);
 int ds4_bridge_v41_req_next(ds4_bridge_v41_req *r, int *next);
 int ds4_bridge_v41_req_position(ds4_bridge_v41_req *r);
+int ds4_bridge_v41_req_force_token(ds4_bridge_v41_req *r, int32_t token);
 ds4_bridge_v41_batch *ds4_bridge_v41_batch_open(ds4_bridge_model *m, int max_rows);
 void ds4_bridge_v41_batch_close(ds4_bridge_v41_batch *b);
 int ds4_bridge_v41_batch_step(ds4_bridge_v41_batch *b,

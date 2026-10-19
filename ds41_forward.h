@@ -263,6 +263,7 @@ void ds4_v41_req_destroy(struct ds4_v41_request *r);
 int ds4_v41_req_prefill(struct ds4_v41_request *r);
 int ds4_v41_req_next(const struct ds4_v41_request *r, int *out);
 int ds4_v41_req_position(const struct ds4_v41_request *r);
+int ds4_v41_req_force_token(struct ds4_v41_request *r, int32_t token);
 int ds4_v41_req_prefill_progress(const struct ds4_v41_request *r, int *completed, int *total);
 struct ds4_v41_batch *ds4_v41_batch_create(void *engine, int rows);
 void ds4_v41_batch_destroy(struct ds4_v41_batch *b);

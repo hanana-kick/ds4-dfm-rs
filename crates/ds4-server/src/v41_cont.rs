@@ -5,7 +5,9 @@
 
 #![cfg(feature = "native")]
 
+use std::ffi::c_void;
 use std::io::Write;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -13,6 +15,7 @@ use ds4_core::v41_media::{V41Images, V41VisionMeta};
 use ds4_core::{Model, V41Batch, V41BatchRequest, V41Sampling, Vocab};
 use ds4_kv::Store as KvStore;
 
+use crate::dsml::SampleOverride;
 use crate::generate::{prepare_required_prefixes, GenerateError, GenerateOutcome};
 use crate::parse::{ChatPart, ParsedRequest};
 use crate::render::syntax_for_model_id;
@@ -75,9 +78,40 @@ impl ContProbe for V41Probe<'_> {
     }
 }
 
+/* Native sampling callbacks run on the owner thread while request handles are
+ * live. The Box<ContStepper> pointee remains stationary as slots move.
+ * The owner closes native requests before dropping either pointer. */
+struct GreedyContext {
+    stepper: *const ContStepper,
+    vocab: *const Vocab,
+}
+
+unsafe extern "C" fn v41_greedy_cb(
+    ud: *mut c_void,
+    ahead: *const i32,
+    n: u32,
+) -> i32 {
+    if ud.is_null() || (n > 0 && ahead.is_null()) || n > 16 {
+        return 0;
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let ctx = unsafe { &*(ud as *const GreedyContext) };
+        let stepper = unsafe { &*ctx.stepper };
+        let vocab = unsafe { &*ctx.vocab };
+        let tokens: &[i32] = if n == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(ahead, n as usize) }
+        };
+        stepper.syntax_greedy_tokens(vocab, tokens)
+    }));
+    i32::from(result.unwrap_or(false))
+}
+
 struct Slot<'m> {
     work: ContOwnedWork,
-    stepper: ContStepper,
+    stepper: Box<ContStepper>,
+    greedy_ctx: Box<GreedyContext>,
     request: Option<V41BatchRequest<'m>>,
     prefilling: bool,
     done: bool,
@@ -100,10 +134,23 @@ impl Slot<'_> {
         }
     }
 
-    fn on_token(&mut self, vocab: &Vocab, token: i32) {
+    fn on_token(&mut self, vocab: &Vocab, predicted: i32) {
         if self.done {
             return;
         }
+        let token = match self.stepper.sample_override() {
+            SampleOverride::Token(forced) => {
+                if let Some(request) = self.request.as_mut() {
+                    if let Err(e) = request.force_token(forced) {
+                        self.error = Some(GenerateError::Engine(e.to_string()));
+                        self.done = true;
+                        return;
+                    }
+                }
+                forced
+            }
+            _ => predicted, // Greedy syntax is selected in the native hook.
+        };
         if self.t_first.is_none() {
             self.t_first = Some(Instant::now());
         }
@@ -259,6 +306,11 @@ impl<'m> V41ContLane<'m> {
             self.ctx,
         );
         let t_admit = Instant::now();
+        let stepper = Box::new(stepper);
+        let mut greedy_ctx = Box::new(GreedyContext {
+            stepper: &*stepper,
+            vocab: self.vocab,
+        });
         let native = match V41BatchRequest::open(
             self.model,
             &self.model_path,
@@ -267,6 +319,8 @@ impl<'m> V41ContLane<'m> {
             stepper.max_tokens.max(0),
             sampling,
             images,
+            Some(v41_greedy_cb),
+            (&mut *greedy_ctx as *mut GreedyContext).cast::<c_void>(),
         ) {
             Ok(native) => native,
             Err(error) => return Err((work, GenerateError::Engine(error.to_string()))),
@@ -274,6 +328,7 @@ impl<'m> V41ContLane<'m> {
         let mut slot = Slot {
             work,
             stepper,
+            greedy_ctx,
             request: Some(native),
             prefilling: true,
             done: false,

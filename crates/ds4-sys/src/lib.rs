@@ -987,6 +987,7 @@ extern "C" {
     ) -> c_int;
     pub fn ds4_bridge_v41_req_next(r: *mut ds4_bridge_v41_req, next: *mut c_int) -> c_int;
     pub fn ds4_bridge_v41_req_position(r: *mut ds4_bridge_v41_req) -> c_int;
+    pub fn ds4_bridge_v41_req_force_token(r: *mut ds4_bridge_v41_req, token: i32) -> c_int;
     pub fn ds4_bridge_v41_batch_open(
         m: *mut ds4_bridge_model,
         max_rows: c_int,

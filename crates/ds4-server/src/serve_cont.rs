@@ -253,6 +253,23 @@ impl ContStepper {
         self.acc.sampling_override(&policy)
     }
 
+    /// Per-request syntax-greedy question for the V4.1 native sampler.
+    /// Read-only during a batch Forward: no generated text is appended until
+    /// every participating GPU row has completed.
+    pub fn syntax_greedy_tokens(&self, vocab: &ds4_core::Vocab, ahead: &[i32]) -> bool {
+        if self.req.kind != ReqKind::Chat || !self.acc.track_tools {
+            return false;
+        }
+        let mut pieces = Vec::with_capacity(ahead.len());
+        for &token in ahead {
+            if vocab.is_stop(token) {
+                break;
+            }
+            pieces.push(vocab.token_text(token));
+        }
+        self.acc.syntax_greedy(&pieces)
+    }
+
     pub fn sample_exclude(&self, eos: i32) -> i32 {
         self.eos_policy
             .excluded(eos, self.acc.thinking_inside())

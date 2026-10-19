@@ -730,6 +730,9 @@ void ds4_v41_req_destroy(struct ds4_v41_request *r) { (void)r; }
 int ds4_v41_req_prefill(struct ds4_v41_request *r) { (void)r; return -1; }
 int ds4_v41_req_next(const struct ds4_v41_request *r, int *out) { (void)r; (void)out; return 0; }
 int ds4_v41_req_position(const struct ds4_v41_request *r) { (void)r; return -1; }
+int ds4_v41_req_force_token(struct ds4_v41_request *r, int32_t token) {
+    (void)r; (void)token; return 0;
+}
 int ds4_v41_req_prefill_progress(const struct ds4_v41_request *r, int *completed, int *total) {
     (void)r; (void)completed; (void)total; return 0;
 }

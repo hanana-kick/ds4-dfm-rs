@@ -49,6 +49,26 @@ jobs:
       - name: Check Rust native HTTP server
         run: cargo check -p ds4-server --features native --bin ds4-server-rs
 
+  arm64-host:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify Spark-compatible CPU architecture
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = aarch64
+          gcc --version
+          cargo --version
+      - name: Compile native host and Rust FFI on ARM64
+        run: make -j2 ds4.o rust-bridge
+      - name: Check ARM64 Rust HTTP server
+        run: cargo check -p ds4-server --features native --bin ds4-server-rs
+      - name: ARM64 V4.1 model-free regressions
+        run: cargo test -p ds4-core --lib v41
+
   spark-gpu:
     needs: model-free
     if: ${{ github.event_name == 'workflow_dispatch' && startsWith(inputs.mode, 'gpu-') }}

@@ -2316,6 +2316,13 @@ fn resolve_seqs(
             return (1, false);
         }
     }
+    if caps.variant == Variant::DeepSeek41Flash && caps.banks == BankLane::OptIn && want > 16 {
+        issues.push(error(
+            "v41_batch_width",
+            format!("DeepSeek V4.1 native batch supports at most 16 sequences, requested {want}"),
+        ));
+        return (1, false);
+    }
     let fitted = facts.banks_fitted.unwrap_or(want);
     let n = fitted.min(want);
     // A forced width that the fit reduces is a silently narrower deployment.
@@ -4017,6 +4024,20 @@ mod tests {
         assert_eq!(p.effective.max_seqs, 2);
         assert_eq!(p.effective.mtp_mode, MtpMode::Off);
         assert_eq!(p.effective.prefix_reuse, ReuseKind::None);
+        let too_wide = resolve_plan(
+            &ServingRequest {
+                max_seqs: MaxSeqs::Fixed(17),
+                mtp_mode: MtpMode::Off,
+                prefix_reuse: PrefixReuse::Off,
+                ..ServingRequest::default()
+            },
+            Some(caps),
+            &EngineFacts {
+                banks_fitted: Some(17),
+                ..EngineFacts::default()
+            },
+        );
+        assert!(too_wide.issues.iter().any(|issue| issue.code == "v41_batch_width"));
     }
 
     #[test]

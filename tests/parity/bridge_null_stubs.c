@@ -716,3 +716,28 @@ int ds4_v41_zchain_rb_set(void *engine, uint32_t il, const float *delta, uint32_
     return 0;
 }
 void ds4_v41_zchain_rb_clear(void) {}
+
+/* Native V4.1 batch API: linked by the Rust bridge but never exercised by
+ * the CPU-only null oracle. All calls fail closed. */
+struct ds4_v41_request *ds4_v41_req_create(
+    void *engine, const int32_t *prompt, int n_prompt, int n_predict,
+    const ds4_decode_sampling *sampling, const ds41_engram_feed *feed,
+    struct ds4_v41_images *images) {
+    (void)engine; (void)prompt; (void)n_prompt; (void)n_predict;
+    (void)sampling; (void)feed; (void)images; return NULL;
+}
+void ds4_v41_req_destroy(struct ds4_v41_request *r) { (void)r; }
+int ds4_v41_req_prefill(struct ds4_v41_request *r) { (void)r; return -1; }
+int ds4_v41_req_next(const struct ds4_v41_request *r, int *out) { (void)r; (void)out; return 0; }
+int ds4_v41_req_position(const struct ds4_v41_request *r) { (void)r; return -1; }
+int ds4_v41_req_prefill_progress(const struct ds4_v41_request *r, int *completed, int *total) {
+    (void)r; (void)completed; (void)total; return 0;
+}
+struct ds4_v41_batch *ds4_v41_batch_create(void *engine, int rows) {
+    (void)engine; (void)rows; return NULL;
+}
+void ds4_v41_batch_destroy(struct ds4_v41_batch *b) { (void)b; }
+int ds4_v41_batch_step(struct ds4_v41_batch *b,
+                       struct ds4_v41_request *const *requests, int n, int32_t *next) {
+    (void)b; (void)requests; (void)n; (void)next; return 1;
+}

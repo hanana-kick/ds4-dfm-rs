@@ -116,9 +116,13 @@ impl<'m> V41ContLane<'m> {
             width,
             floor_bytes,
         )
-        .and_then(|batch| batch.with_mtp(
-            route.dspark.unwrap_or(1), route.verify_k, route.graph.unwrap_or(true),
-        ))
+        .and_then(|batch| {
+            batch.with_mtp(
+                route.dspark.unwrap_or(1),
+                route.verify_k,
+                route.graph.unwrap_or(true),
+            )
+        })
         .map_err(engine_error)?;
         Ok(Self {
             model,
@@ -272,8 +276,14 @@ impl<'m> V41ContLane<'m> {
         Ok(result)
     }
 
-    fn sample_emit(&mut self, state: &mut State<'m>, out: &mut dyn Write) -> Result<(), GenerateError> {
-        if state.done { return Ok(()); }
+    fn sample_emit(
+        &mut self,
+        state: &mut State<'m>,
+        out: &mut dyn Write,
+    ) -> Result<(), GenerateError> {
+        if state.done {
+            return Ok(());
+        }
         loop {
             // The target sample is authoritative. A deterministic draft is
             // accepted only on equality, preserving the requested distribution
@@ -284,10 +294,15 @@ impl<'m> V41ContLane<'m> {
                     return Err(engine_error("forced token conflicts with EOS policy"))
                 }
                 SampleOverride::Token(t) => t,
-                SampleOverride::None => state.native.sample(
-                    state.sampling, &mut state.rng,
-                    state.stepper.v41_syntax_greedy(), excluded,
-                ).map_err(engine_error)?,
+                SampleOverride::None => state
+                    .native
+                    .sample(
+                        state.sampling,
+                        &mut state.rng,
+                        state.stepper.v41_syntax_greedy(),
+                        excluded,
+                    )
+                    .map_err(engine_error)?,
             };
             state.t_first.get_or_insert_with(Instant::now);
             if self.model.token_is_stop(token) {
@@ -336,7 +351,9 @@ impl<'m> V41ContLane<'m> {
         let (rounds, offered, accepted) = state.native.spec_stats();
         result.speculation_active = offered != 0;
         if offered != 0 {
-            eprintln!("[v41-mtp] request complete rounds={rounds} offered={offered} accepted={accepted}");
+            eprintln!(
+                "[v41-mtp] request complete rounds={rounds} offered={offered} accepted={accepted}"
+            );
         }
         if let Some((calls, raw)) = state.stepper.take_tool_replay() {
             self.memory.borrow_mut().remember(&calls, &raw);

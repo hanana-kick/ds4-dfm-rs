@@ -220,7 +220,9 @@ impl<'m> V41Batch<'m> {
         self.graph = graph;
         Ok(self)
     }
-    pub fn last_verified_rows(&self) -> usize { self.last_rows }
+    pub fn last_verified_rows(&self) -> usize {
+        self.last_rows
+    }
     pub fn width(&self) -> usize {
         self.width
     }
@@ -358,12 +360,18 @@ impl<'m> V41Batch<'m> {
         // SAFETY: configure before prefill; feed/images are still owned here.
         let rc = unsafe {
             ffi::ds4_bridge_v41_request_set_mtp(
-                raw.as_ptr(), self.mtp_mode, self.verify_k, i32::from(self.graph),
-                err.as_mut_ptr().cast(), err.len(),
+                raw.as_ptr(),
+                self.mtp_mode,
+                self.verify_k,
+                i32::from(self.graph),
+                err.as_mut_ptr().cast(),
+                err.len(),
             )
         };
         if rc != 0 {
-            unsafe { ffi::ds4_bridge_v41_request_close(raw.as_ptr()); }
+            unsafe {
+                ffi::ds4_bridge_v41_request_close(raw.as_ptr());
+            }
             return Err(ffi_error(&err));
         }
         Ok(V41Request {
@@ -392,11 +400,16 @@ impl<'m> V41Batch<'m> {
             return Err(asset_error("invalid/poisoned V4.1 cohort"));
         }
         for (request, token) in rows.iter() {
-            if !request.ready || request.poisoned || request.round.rows() != 0
+            if !request.ready
+                || request.poisoned
+                || request.round.rows() != 0
                 || !std::ptr::eq(request.model, self.model)
-                || *token < 0 || *token >= self.model.vocab().n_vocab()
+                || *token < 0
+                || *token >= self.model.vocab().n_vocab()
             {
-                return Err(asset_error("unready V4.1 cohort or uncommitted verification"));
+                return Err(asset_error(
+                    "unready V4.1 cohort or uncommitted verification",
+                ));
             }
         }
         let handles: Vec<_> = rows.iter().map(|(r, _)| r.raw.as_ptr()).collect();
@@ -410,37 +423,66 @@ impl<'m> V41Batch<'m> {
         let rc = unsafe {
             if self.mtp_mode != 0 {
                 ffi::ds4_bridge_v41_batch_verify(
-                    self.raw.as_ptr(), handles.as_ptr(), tokens.as_ptr(), rows.len() as i32,
-                    self.logits.as_mut_ptr(), rows.len() * VERIFY_MAX * vocab,
-                    proposals.as_mut_ptr(), proposals.len(), widths.as_mut_ptr(),
-                    err.as_mut_ptr().cast(), err.len(),
+                    self.raw.as_ptr(),
+                    handles.as_ptr(),
+                    tokens.as_ptr(),
+                    rows.len() as i32,
+                    self.logits.as_mut_ptr(),
+                    rows.len() * VERIFY_MAX * vocab,
+                    proposals.as_mut_ptr(),
+                    proposals.len(),
+                    widths.as_mut_ptr(),
+                    err.as_mut_ptr().cast(),
+                    err.len(),
                 )
             } else {
                 ffi::ds4_bridge_v41_batch_step(
-                    self.raw.as_ptr(), handles.as_ptr(), tokens.as_ptr(), rows.len() as i32,
-                    self.logits.as_mut_ptr(), rows.len() * vocab,
-                    err.as_mut_ptr().cast(), err.len(),
+                    self.raw.as_ptr(),
+                    handles.as_ptr(),
+                    tokens.as_ptr(),
+                    rows.len() as i32,
+                    self.logits.as_mut_ptr(),
+                    rows.len() * vocab,
+                    err.as_mut_ptr().cast(),
+                    err.len(),
                 )
             }
         };
-        let widths_ok = widths[..rows.len()].iter().all(|&n| (1..=VERIFY_MAX as u32).contains(&n));
+        let widths_ok = widths[..rows.len()]
+            .iter()
+            .all(|&n| (1..=VERIFY_MAX as u32).contains(&n));
         if rc != 0 || !widths_ok {
             self.poisoned = true;
-            for (r, _) in rows { r.poisoned = true; }
-            return Err(if rc != 0 { ffi_error(&err) } else { asset_error("invalid native MTP row count") });
+            for (r, _) in rows {
+                r.poisoned = true;
+            }
+            return Err(if rc != 0 {
+                ffi_error(&err)
+            } else {
+                asset_error("invalid native MTP row count")
+            });
         }
         let mut offset = 0;
         self.last_rows = 0;
         for (i, (r, _)) in rows.iter_mut().enumerate() {
             let n = widths[i] as usize;
-            r.logits.copy_from_slice(&self.logits[offset..offset + vocab]);
+            r.logits
+                .copy_from_slice(&self.logits[offset..offset + vocab]);
             if self.mtp_mode != 0 {
-                if !r.round.begin(&proposals[i * VERIFY_MAX..i * VERIFY_MAX + n]) {
-                    self.poisoned = true; r.poisoned = true;
+                if !r
+                    .round
+                    .begin(&proposals[i * VERIFY_MAX..i * VERIFY_MAX + n])
+                {
+                    self.poisoned = true;
+                    r.poisoned = true;
                     return Err(asset_error("overlapping V4.1 verification rounds"));
                 }
-                r.verify_logits[..n * vocab].copy_from_slice(&self.logits[offset..offset + n * vocab]);
-                if n > 1 { r.spec_rounds += 1; r.spec_offered += (n - 1) as u64; }
+                r.verify_logits[..n * vocab]
+                    .copy_from_slice(&self.logits[offset..offset + n * vocab]);
+                if n > 1 {
+                    r.spec_rounds += 1;
+                    r.spec_offered += (n - 1) as u64;
+                }
             }
             offset += n * vocab;
             self.last_rows += n;
@@ -493,24 +535,37 @@ impl V41Request<'_> {
     /// Called only after this target token passed the real host's grammar,
     /// EOS, tool-stop and output-budget checks. Future rows are never sampled.
     pub fn advance_verified(&mut self, token: i32) -> Result<bool> {
-        if self.poisoned { return Err(asset_error("poisoned V4.1 verification")); }
-        if !self.round.accept(token) { return Ok(false); }
+        if self.poisoned {
+            return Err(asset_error("poisoned V4.1 verification"));
+        }
+        if !self.round.accept(token) {
+            return Ok(false);
+        }
         let vocab = self.logits.len();
         let offset = self.round.cursor() * vocab;
-        self.logits.copy_from_slice(&self.verify_logits[offset..offset + vocab]);
+        self.logits
+            .copy_from_slice(&self.verify_logits[offset..offset + vocab]);
         Ok(true)
     }
     pub fn finish_round(&mut self) -> Result<()> {
         let keep = self.round.keep();
-        if keep == 0 { return Ok(()); } // prefill or ordinary decode
+        if keep == 0 {
+            return Ok(());
+        } // prefill or ordinary decode
         let mut err = [0u8; 512];
         // SAFETY: this request exclusively owns its provisional target state.
         let rc = unsafe {
             ffi::ds4_bridge_v41_request_commit(
-                self.raw.as_ptr(), keep as u32, err.as_mut_ptr().cast(), err.len(),
+                self.raw.as_ptr(),
+                keep as u32,
+                err.as_mut_ptr().cast(),
+                err.len(),
             )
         };
-        if rc != 0 { self.poisoned = true; return Err(ffi_error(&err)); }
+        if rc != 0 {
+            self.poisoned = true;
+            return Err(ffi_error(&err));
+        }
         self.spec_accepted += (keep - 1) as u64;
         self.round.clear();
         Ok(())

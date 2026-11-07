@@ -20,10 +20,18 @@ impl VerifiedRound {
         self.cursor = 0;
         true
     }
-    pub(super) fn rows(&self) -> usize { self.rows }
-    pub(super) fn cursor(&self) -> usize { self.cursor }
+    pub(super) fn rows(&self) -> usize {
+        self.rows
+    }
+    pub(super) fn cursor(&self) -> usize {
+        self.cursor
+    }
     pub(super) fn keep(&self) -> usize {
-        if self.rows == 0 { 0 } else { self.cursor + 1 }
+        if self.rows == 0 {
+            0
+        } else {
+            self.cursor + 1
+        }
     }
     pub(super) fn accept(&mut self, target: i32) -> bool {
         let next = self.cursor + 1;
@@ -33,7 +41,10 @@ impl VerifiedRound {
         self.cursor = next;
         true
     }
-    pub(super) fn clear(&mut self) { self.rows = 0; self.cursor = 0; }
+    pub(super) fn clear(&mut self) {
+        self.rows = 0;
+        self.cursor = 0;
+    }
 }
 
 #[cfg(test)]
@@ -44,10 +55,13 @@ mod tests {
         for accepted in 0..=5 {
             let mut r = VerifiedRound::default();
             assert!(r.begin(&[10, 11, 12, 13, 14, 15]));
-            for j in 0..accepted { assert!(r.accept(11 + j as i32)); }
+            for j in 0..accepted {
+                assert!(r.accept(11 + j as i32));
+            }
             assert!(!r.accept(99));
             assert_eq!(r.keep(), 1 + accepted);
-            r.clear(); assert_eq!(r.keep(), 0);
+            r.clear();
+            assert_eq!(r.keep(), 0);
         }
     }
     #[test]
@@ -56,19 +70,25 @@ mod tests {
         for (i, r) in all.iter_mut().enumerate() {
             assert!(r.begin(&[i as i32 * 10, i as i32 * 10 + 1, i as i32 * 10 + 2]));
         }
-        assert!(all[0].accept(1)); assert!(all[0].accept(2));
+        assert!(all[0].accept(1));
+        assert!(all[0].accept(2));
         assert!(!all[1].accept(99));
-        assert!(all[2].accept(21)); assert!(!all[2].accept(99));
+        assert!(all[2].accept(21));
+        assert!(!all[2].accept(99));
         all[3].clear(); // cancellation must not mutate a sibling
         assert_eq!(all.map(|r| r.keep()), [3, 1, 2, 0]);
     }
     #[test]
     fn a_bonus_cannot_advance_past_the_last_logit_row() {
         let mut r = VerifiedRound::default();
-        assert!(r.begin(&[1, 2])); assert!(r.accept(2));
-        assert!(!r.accept(3)); assert_eq!(r.keep(), 2);
+        assert!(r.begin(&[1, 2]));
+        assert!(r.accept(2));
+        assert!(!r.accept(3));
+        assert_eq!(r.keep(), 2);
         assert!(!r.begin(&[4]));
-        r.clear(); assert!(r.begin(&[4])); assert!(!r.accept(5));
+        r.clear();
+        assert!(r.begin(&[4]));
+        assert!(!r.accept(5));
     }
     #[test]
     fn eos_budget_and_forced_tool_syntax_stop_before_accept() {
@@ -78,14 +98,18 @@ mod tests {
         // EOS/output cap terminates before accepting row 12. A grammar-forced
         // token different from 12 takes the same mismatch path.
         assert_eq!(r.keep(), 2);
-        assert!(!r.accept(77)); assert_eq!(r.keep(), 2);
+        assert!(!r.accept(77));
+        assert_eq!(r.keep(), 2);
     }
     #[test]
     fn invalid_width_and_double_begin_do_not_mutate_a_round() {
         let mut r = VerifiedRound::default();
-        assert!(!r.begin(&[])); assert!(!r.begin(&[0; VERIFY_MAX + 1]));
-        assert!(r.begin(&[1, 2, 3])); assert!(!r.begin(&[99]));
-        assert_eq!(r.rows(), 3); assert_eq!(r.cursor(), 0);
+        assert!(!r.begin(&[]));
+        assert!(!r.begin(&[0; VERIFY_MAX + 1]));
+        assert!(r.begin(&[1, 2, 3]));
+        assert!(!r.begin(&[99]));
+        assert_eq!(r.rows(), 3);
+        assert_eq!(r.cursor(), 0);
         assert!(r.accept(2));
     }
 }

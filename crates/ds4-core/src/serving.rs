@@ -4250,16 +4250,28 @@ mod tests {
         assert!(p.issues.iter().any(|i| i.code == "v41_batch_reuse"));
         for width in [2, 4, 8] {
             for mode in [MtpMode::Off, MtpMode::Auto, MtpMode::On] {
-                let p = plan(ServingRequest {
-                    max_seqs: MaxSeqs::Fixed(width), mtp_mode: mode,
-                    prefix_reuse: PrefixReuse::Off, ..ServingRequest::default()
-                }, ModelFamily::DeepSeek4, Variant::DeepSeek41Flash);
-                assert!(!p.has_errors(), "width={width} mode={mode:?}: {:?}", p.issues);
+                let p = plan(
+                    ServingRequest {
+                        max_seqs: MaxSeqs::Fixed(width),
+                        mtp_mode: mode,
+                        prefix_reuse: PrefixReuse::Off,
+                        ..ServingRequest::default()
+                    },
+                    ModelFamily::DeepSeek4,
+                    Variant::DeepSeek41Flash,
+                );
+                assert!(
+                    !p.has_errors(),
+                    "width={width} mode={mode:?}: {:?}",
+                    p.issues
+                );
                 assert_eq!(p.effective.max_seqs, width);
                 assert_eq!(p.effective.mtp_mode, mode);
                 assert!(!p.uses_serial_mtp());
                 assert!(p.wants_bank_lane());
-                if mode != MtpMode::Off { assert_eq!(p.qualified.mtp, Support::Present); }
+                if mode != MtpMode::Off {
+                    assert_eq!(p.qualified.mtp, Support::Present);
+                }
             }
         }
         let p = plan(

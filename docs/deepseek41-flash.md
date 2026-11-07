@@ -1,8 +1,9 @@
 # DeepSeek V4.1 Flash (ds41) on ds4-dfm-rs
 
-> Fork addition: [experimental packed concurrent requests](ds41-concurrent-serving.md)
-> are opt-in, MTP/reuse-off and **not GPU-qualified**. Historical measurements
-> below remain single-request evidence; they do not qualify the new lane.
+> Fork addition: [packed concurrent MTP requests](ds41-concurrent-serving.md)
+> support request-local draft/verify/rollback and Vision; prefix reuse remains
+> off. Historical measurements below are single-request evidence, not proof
+> of the new concurrent GPU execution.
 
 DeepSeek V4.1 Flash is the family the `ds41` port brings to this tree: a
 40-layer mixture-of-experts model whose routed-expert weights are 8-dimensional
@@ -220,9 +221,9 @@ The native run keeps one prompt-end KV checkpoint and reuses the previous
 prompt's prefix automatically (unit U-B, `--no-kv-reuse` disables it); it is
 reported as usage cached tokens. `--prefix-reuse off` disables both live and
 disk reuse; auto and exact select the prompt-end checkpoint. Partial reuse remains refused. This fork permits explicit `--max-seqs 2..8`
-only with `--mtp-mode off --prefix-reuse off`, through the separate experimental
-[packed lane](ds41-concurrent-serving.md), not persistent banks. Its GPU gate
-has not been run. The per-family sampling profile
+with `--mtp-mode on|auto|off --prefix-reuse off`, through its request-local
+[packed MTP lane](ds41-concurrent-serving.md), not persistent banks. Host
+control tests do not qualify GPU/model arithmetic. The per-family sampling profile
 is not adopted on this path: sampling is request-driven.
 
 For device sampling, an identical prompt is prefilled again: the checkpoint

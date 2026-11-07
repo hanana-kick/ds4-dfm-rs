@@ -775,8 +775,9 @@ fn main() {
             }
             fitted.apply_env();
             cfg.adopt_plan(&fitted);
-            eprintln!("[v41-batch] experimental lane width={} vision={} MTP=off reuse=off; GPU qualification pending",
-                cont_width, v41_route.as_ref().is_some_and(|r| r.vision.is_some()));
+            eprintln!("[v41-batch] lane width={} vision={} MTP={} reuse=off; request-local draft/verify/rollback",
+                cont_width, v41_route.as_ref().is_some_and(|r| r.vision.is_some()),
+                fitted.effective.mtp_mode.as_str());
             Some(Box::new(v41))
         } else if cont_width > 0 && v41_route.is_none() && backend == Backend::Cuda {
             match model.batch_ctx_fit(

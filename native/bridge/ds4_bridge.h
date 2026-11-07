@@ -430,6 +430,12 @@ ds4_bridge_v41_batch *ds4_bridge_v41_batch_open(ds4_bridge_model *m, int width, 
 void ds4_bridge_v41_batch_close(ds4_bridge_v41_batch *b);
 int ds4_bridge_v41_batch_step(ds4_bridge_v41_batch *b, ds4_bridge_v41_request *const *requests,
     const int32_t *tokens, int count, float *logits, size_t floats, char *err, size_t errlen);
+int ds4_bridge_v41_request_set_mtp(ds4_bridge_v41_request *r, int mode, uint32_t verify,
+    int graph, char *err, size_t errlen);
+int ds4_bridge_v41_batch_verify(ds4_bridge_v41_batch *b, ds4_bridge_v41_request *const *requests,
+    const int32_t *tokens, int count, float *logits, size_t floats, int32_t *proposals,
+    size_t proposal_slots, uint32_t *widths, char *err, size_t errlen);
+int ds4_bridge_v41_request_commit(ds4_bridge_v41_request *r, uint32_t keep, char *err, size_t errlen);
 
 int ds4_bridge_session_eval_layer_slice(ds4_bridge_session *s,
                                         const int32_t *tokens,

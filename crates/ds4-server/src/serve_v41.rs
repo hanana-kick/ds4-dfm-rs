@@ -1,9 +1,9 @@
-//! Experimental V4.1 rolling requests with shared packed dense/MoE execution.
+//! V4.1 rolling requests with packed dense/MoE MTP target verification.
 //!
-//! Entrpi v0.6.5 supplies the ownership rule: one GPU owner admits/retire slots
-//! between decode rounds. V4.1 arithmetic is its own YoungAi port, not V4's KV
-//! layout. This lane deliberately has no MTP or cross-request KV checkpoints.
-//! Each admitted request owns KV, Engram history, image features and RNG.
+//! Entrpi v0.6.5 supplies the ownership rule: one GPU owner admits/retires
+//! slots between rounds. Each request owns its draft towers, KV, Engram feed,
+//! image features, RNG and accepted-token history. The ordinary host stepper
+//! checks every accepted target token, including DSML syntax and stop rules.
 use std::cell::RefCell;
 use std::io::Write;
 use std::time::Instant;
@@ -98,9 +98,9 @@ impl<'m> V41ContLane<'m> {
         floor_bytes: u64,
         tool_memory: ToolMemoryConfig,
     ) -> Result<Self, GenerateError> {
-        if route.dspark != Some(0) || !route.no_kv_reuse {
+        if !route.no_kv_reuse {
             return Err(GenerateError::BadRequest(
-                "V4.1 concurrent lane requires --mtp-mode off --prefix-reuse off",
+                "V4.1 concurrent lane requires --prefix-reuse off",
             ));
         }
         let ctx = model
@@ -116,6 +116,9 @@ impl<'m> V41ContLane<'m> {
             width,
             floor_bytes,
         )
+        .and_then(|batch| batch.with_mtp(
+            route.dspark.unwrap_or(1), route.verify_k, route.graph.unwrap_or(true),
+        ))
         .map_err(engine_error)?;
         Ok(Self {
             model,
@@ -269,41 +272,48 @@ impl<'m> V41ContLane<'m> {
         Ok(result)
     }
 
-    fn sample_emit(&self, state: &mut State<'m>, out: &mut dyn Write) -> Result<(), GenerateError> {
-        if state.done {
-            return Ok(());
-        }
-        let excluded = state.stepper.sample_exclude(self.model.token_eos());
-        let token = match state.stepper.sample_override() {
-            SampleOverride::Token(t) if t == excluded => {
-                return Err(engine_error("forced token conflicts with EOS policy"))
+    fn sample_emit(&mut self, state: &mut State<'m>, out: &mut dyn Write) -> Result<(), GenerateError> {
+        if state.done { return Ok(()); }
+        loop {
+            // The target sample is authoritative. A deterministic draft is
+            // accepted only on equality, preserving the requested distribution
+            // without sampling rejected future rows or advancing their RNG.
+            let excluded = state.stepper.sample_exclude(self.model.token_eos());
+            let token = match state.stepper.sample_override() {
+                SampleOverride::Token(t) if t == excluded => {
+                    return Err(engine_error("forced token conflicts with EOS policy"))
+                }
+                SampleOverride::Token(t) => t,
+                SampleOverride::None => state.native.sample(
+                    state.sampling, &mut state.rng,
+                    state.stepper.v41_syntax_greedy(), excluded,
+                ).map_err(engine_error)?,
+            };
+            state.t_first.get_or_insert_with(Instant::now);
+            if self.model.token_is_stop(token) {
+                state.stepper.mark_stop();
+                state.eos = true;
+                state.done = true;
+                state.pending = None;
+            } else {
+                let piece = self.model.token_text(token).map_err(engine_error)?;
+                let step = state.stepper.feed(&piece);
+                state.native.record(token);
+                push(out, &step.bytes)?;
+                state.done = step.done;
+                // EOS, output limits, stop strings and DSML tool boundaries
+                // win BEFORE accepting another already-computed draft row.
+                if !state.done && state.native.advance_verified(token).map_err(engine_error)? {
+                    continue;
+                }
+                state.pending = (!state.done).then_some(token);
             }
-            SampleOverride::Token(t) => t,
-            SampleOverride::None => state
-                .native
-                .sample(
-                    state.sampling,
-                    &mut state.rng,
-                    state.stepper.v41_syntax_greedy(),
-                    excluded,
-                )
-                .map_err(engine_error)?,
-        };
-        state.t_first.get_or_insert_with(Instant::now);
-        if self.model.token_is_stop(token) {
-            state.stepper.mark_stop();
-            state.eos = true;
-            state.done = true;
-            state.pending = None;
+            state.native.finish_round().map_err(|error| {
+                self.batch.invalidate();
+                engine_error(error)
+            })?;
             return Ok(());
         }
-        let piece = self.model.token_text(token).map_err(engine_error)?;
-        let step = state.stepper.feed(&piece);
-        state.native.record(token);
-        push(out, &step.bytes)?;
-        state.done = step.done;
-        state.pending = (!state.done).then_some(token);
-        Ok(())
     }
 
     fn finish(&self, state: &mut State<'m>, cors: bool) -> (Vec<u8>, GenerateOutcome) {
@@ -322,7 +332,12 @@ impl<'m> V41ContLane<'m> {
             decode_tokens: state.stepper.completion(),
             decode_steps: state.steps,
         };
-        let (tail, result) = state.stepper.finalize(state.eos, 0, n, t, cors);
+        let (tail, mut result) = state.stepper.finalize(state.eos, 0, n, t, cors);
+        let (rounds, offered, accepted) = state.native.spec_stats();
+        result.speculation_active = offered != 0;
+        if offered != 0 {
+            eprintln!("[v41-mtp] request complete rounds={rounds} offered={offered} accepted={accepted}");
+        }
         if let Some((calls, raw)) = state.stepper.take_tool_replay() {
             self.memory.borrow_mut().remember(&calls, &raw);
         }
@@ -333,7 +348,7 @@ impl<'m> V41ContLane<'m> {
         self.steps += 1;
         if n > self.max_rows {
             self.max_rows = n;
-            eprintln!("[v41-batch] packed_decode rows={n} steps={} (shared dense/MoE; request-local KV/Engram)", self.steps);
+            eprintln!("[v41-batch] packed_decode rows={n} steps={} verify_rows={} (shared dense/MoE; request-local MTP/KV/Engram)", self.steps, self.batch.last_verified_rows());
         }
     }
 

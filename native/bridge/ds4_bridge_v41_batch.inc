@@ -45,7 +45,10 @@ ds4_bridge_v41_request *ds4_bridge_v41_request_open(ds4_bridge_model *m,
     r->model = m; r->provider = provider; r->drain = drain;
     if (!no_engram && ds4_v41_engram_count(m->engine) > 0) {
         if (!rows || !drain) goto fail;
-        r->feed = ds4_v41_feed_open(m->engine, np, rows, provider, wait, provider, next, provider);
+        /* Tiny prompts still need pinned feed capacity for a full MTP block.
+         * Do not derive that capacity from a process-global DSpark switch. */
+        int feed_rows = np < (int)DS41_VERIFY_MAX ? (int)DS41_VERIFY_MAX : np;
+        r->feed = ds4_v41_feed_open(m->engine, feed_rows, rows, provider, wait, provider, next, provider);
         if (!r->feed) goto fail;
     }
     if (images) {
@@ -103,3 +106,5 @@ int ds4_bridge_v41_batch_step(ds4_bridge_v41_batch *b, ds4_bridge_v41_request *c
     if (rc) set_err(err, errlen, "V4.1 packed decode failed; discard the active cohort");
     return rc;
 }
+
+#include "ds4_bridge_v41_mtp.inc"

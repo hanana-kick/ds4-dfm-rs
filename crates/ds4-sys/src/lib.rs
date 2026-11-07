@@ -1477,6 +1477,19 @@ unsafe extern "C" {
         errlen: usize,
     ) -> *mut ds4_bridge_v41_batch;
     pub fn ds4_bridge_v41_batch_close(b: *mut ds4_bridge_v41_batch);
+    pub fn ds4_bridge_v41_request_set_mtp(
+        r: *mut ds4_bridge_v41_request, mode: c_int, verify: u32,
+        graph: c_int, err: *mut c_char, errlen: usize,
+    ) -> c_int;
+    pub fn ds4_bridge_v41_batch_verify(
+        b: *mut ds4_bridge_v41_batch, requests: *const *mut ds4_bridge_v41_request,
+        tokens: *const i32, count: c_int, logits: *mut f32, floats: usize,
+        proposals: *mut i32, proposal_slots: usize, widths: *mut u32,
+        err: *mut c_char, errlen: usize,
+    ) -> c_int;
+    pub fn ds4_bridge_v41_request_commit(
+        r: *mut ds4_bridge_v41_request, keep: u32, err: *mut c_char, errlen: usize,
+    ) -> c_int;
     pub fn ds4_bridge_v41_batch_step(
         b: *mut ds4_bridge_v41_batch,
         requests: *const *mut ds4_bridge_v41_request,

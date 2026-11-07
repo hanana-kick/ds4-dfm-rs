@@ -6,6 +6,7 @@
 #ifndef DS41_BATCH_H
 #define DS41_BATCH_H
 #include "ds41_forward.h"
+#include "ds41_round.h"
 #include <stddef.h>
 #ifdef __cplusplus
 extern "C" {
@@ -34,6 +35,14 @@ void ds4_v41_batch_close(struct ds4_v41_batch *b);
  * Any execution failure poisons the batch and ALL supplied requests. */
 int ds4_v41_batch_step(struct ds4_v41_batch *b, struct ds4_v41_request **requests,
     const int32_t *tokens, int count, float *logits, size_t floats);
+/* Set before prefill: 0=off, 1=adaptive, 2=on. Missing MTP is an error. */
+int ds4_v41_request_set_mtp(struct ds4_v41_request *r, int mode, uint32_t verify, int graph);
+/* Fixed-stride proposals (DS41_VERIFY_MAX per request), dense packed logits.
+ * Target rows remain provisional until request_commit(1+accepted drafts). */
+int ds4_v41_batch_verify(struct ds4_v41_batch *b, struct ds4_v41_request **requests,
+    const int32_t *tokens, int count, float *logits, size_t floats,
+    int32_t *proposals, size_t proposal_slots, uint32_t *widths);
+int ds4_v41_request_commit(struct ds4_v41_request *r, uint32_t keep);
 #ifdef __cplusplus
 }
 #endif

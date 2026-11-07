@@ -50,6 +50,14 @@ int ds4_v41_batch_step(struct ds4_v41_batch *b,struct ds4_v41_request **r,const 
     for(int j=0;j<n;j++) { r[j]->pos++;for(int k=0;k<3;k++)out[j*3+k]=(float)(r[j]->p->identity*100+ids[j]+k); }
     return 0;
 }
+int ds4_v41_request_set_mtp(struct ds4_v41_request *r,int mode,uint32_t verify,int graph) {
+    (void)graph; return !r || mode < 0 || mode > 2 || verify > 5;
+}
+int ds4_v41_batch_verify(struct ds4_v41_batch *b,struct ds4_v41_request **r,
+        const int32_t *ids,int n,float *out,size_t count,int32_t *p,size_t slots,uint32_t *w) {
+    (void)b;(void)r;(void)ids;(void)n;(void)out;(void)count;(void)p;(void)slots;(void)w;return 1;
+}
+int ds4_v41_request_commit(struct ds4_v41_request *r,uint32_t keep) { (void)r;(void)keep;return 1; }
 static int rows(uint32_t pos,const int32_t *ids,int n,uint8_t *const *dst,void *ud) {
     (void)pos;(void)ids;(void)n;(void)dst;(void)ud;return 0;
 }

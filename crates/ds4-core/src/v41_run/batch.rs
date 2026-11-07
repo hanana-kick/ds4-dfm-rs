@@ -12,11 +12,14 @@ use std::marker::PhantomData;
 use std::ptr::NonNull;
 use std::rc::Rc;
 
-/// Maximum packed rows of the existing V4.1 GEMV kernel path, not a throughput
-/// or GPU qualification claim. Larger batches need a separately gated kernel.
+mod round;
+use round::{VerifiedRound, VERIFY_MAX};
+
+/// Maximum active requests. Each may contribute 1 + the trained MTP block
+/// target rows; native projection tiles preserve the decode arithmetic path.
 pub const V41_BATCH_MAX: usize = 8;
 
-/// A shared, plain-decode workspace. No persistent banks, graphs or MTP here.
+/// Shared target verification workspace, with request-local MTP state.
 /// Requests borrow the same model and cannot be moved to another host thread.
 pub struct V41Batch<'m> {
     raw: NonNull<ffi::ds4_bridge_v41_batch>,
@@ -27,6 +30,10 @@ pub struct V41Batch<'m> {
     width: usize,
     floor_bytes: u64,
     logits: Vec<f32>,
+    mtp_mode: i32,
+    verify_k: u32,
+    graph: bool,
+    last_rows: usize,
     poisoned: bool,
     _thread: PhantomData<Rc<()>>,
 }
@@ -40,6 +47,11 @@ pub struct V41Request<'m> {
     _feed: Option<Box<V41Feed>>,
     images: Option<V41Images>,
     logits: Vec<f32>,
+    verify_logits: Vec<f32>,
+    round: VerifiedRound,
+    spec_rounds: u64,
+    spec_offered: u64,
+    spec_accepted: u64,
     generated: Vec<i32>,
     breakers: Option<Vec<bool>>,
     ready: bool,
@@ -188,11 +200,27 @@ impl<'m> V41Batch<'m> {
             no_engram,
             width,
             floor_bytes,
-            logits: vec![0.; width * vocab],
+            logits: vec![0.; width * VERIFY_MAX * vocab],
+            mtp_mode: 0,
+            verify_k: 0,
+            graph: true,
+            last_rows: 0,
             poisoned: false,
             _thread: PhantomData,
         })
     }
+    /// Select before admitting requests. On requires a real per-request
+    /// drafter; a missing/failed allocation never silently becomes C1/plain.
+    pub fn with_mtp(mut self, mode: i32, verify: i32, graph: bool) -> Result<Self> {
+        if !(0..=2).contains(&mode) || !(0..VERIFY_MAX as i32).contains(&verify) {
+            return Err(asset_error("invalid V4.1 MTP mode or verification width"));
+        }
+        self.mtp_mode = mode;
+        self.verify_k = verify as u32;
+        self.graph = graph;
+        Ok(self)
+    }
+    pub fn last_verified_rows(&self) -> usize { self.last_rows }
     pub fn width(&self) -> usize {
         self.width
     }
@@ -327,12 +355,28 @@ impl<'m> V41Batch<'m> {
             )
         };
         let raw = NonNull::new(raw).ok_or_else(|| ffi_error(&err))?;
+        // SAFETY: configure before prefill; feed/images are still owned here.
+        let rc = unsafe {
+            ffi::ds4_bridge_v41_request_set_mtp(
+                raw.as_ptr(), self.mtp_mode, self.verify_k, i32::from(self.graph),
+                err.as_mut_ptr().cast(), err.len(),
+            )
+        };
+        if rc != 0 {
+            unsafe { ffi::ds4_bridge_v41_request_close(raw.as_ptr()); }
+            return Err(ffi_error(&err));
+        }
         Ok(V41Request {
             raw,
             model: self.model,
             _feed: feed,
             images,
             logits: vec![0.; self.model.vocab().n_vocab() as usize],
+            verify_logits: vec![0.; VERIFY_MAX * self.model.vocab().n_vocab() as usize],
+            round: VerifiedRound::default(),
+            spec_rounds: 0,
+            spec_offered: 0,
+            spec_accepted: 0,
             generated: Vec::new(),
             breakers: None,
             ready: false,
@@ -341,54 +385,65 @@ impl<'m> V41Batch<'m> {
         })
     }
 
-    /// One real packed GPU forward, not sequential full-request generation.
+    /// One logical packed target forward. MTP adds request-local proposals;
+    /// target samples/DSML decisions and rollback are committed by the host.
     pub fn decode(&mut self, rows: &mut [(&mut V41Request<'m>, i32)]) -> Result<()> {
         if self.poisoned || rows.is_empty() || rows.len() > self.width {
             return Err(asset_error("invalid/poisoned V4.1 cohort"));
         }
         for (request, token) in rows.iter() {
-            if !request.ready
-                || request.poisoned
+            if !request.ready || request.poisoned || request.round.rows() != 0
                 || !std::ptr::eq(request.model, self.model)
-                || *token < 0
-                || *token >= self.model.vocab().n_vocab()
+                || *token < 0 || *token >= self.model.vocab().n_vocab()
             {
-                return Err(asset_error(
-                    "V4.1 cohort has an unready request or invalid token/model",
-                ));
+                return Err(asset_error("unready V4.1 cohort or uncommitted verification"));
             }
         }
         let handles: Vec<_> = rows.iter().map(|(r, _)| r.raw.as_ptr()).collect();
         let tokens: Vec<_> = rows.iter().map(|(_, t)| *t).collect();
         let vocab = self.model.vocab().n_vocab() as usize;
-        let count = rows.len() * vocab;
+        let mut proposals = [0i32; V41_BATCH_MAX * VERIFY_MAX];
+        let mut widths = [1u32; V41_BATCH_MAX];
         let mut err = [0u8; 512];
-        // SAFETY: exclusive mutable requests, all same model, stable handles,
-        // output capacity checked. Native execution synchronizes before return.
+        // SAFETY: exclusive owner-thread requests; all output arrays cover
+        // the maximum trained width. Native execution synchronizes on return.
         let rc = unsafe {
-            ffi::ds4_bridge_v41_batch_step(
-                self.raw.as_ptr(),
-                handles.as_ptr(),
-                tokens.as_ptr(),
-                rows.len() as i32,
-                self.logits.as_mut_ptr(),
-                count,
-                err.as_mut_ptr().cast(),
-                err.len(),
-            )
-        };
-        if rc != 0 {
-            self.poisoned = true;
-            for (r, _) in rows {
-                r.poisoned = true;
+            if self.mtp_mode != 0 {
+                ffi::ds4_bridge_v41_batch_verify(
+                    self.raw.as_ptr(), handles.as_ptr(), tokens.as_ptr(), rows.len() as i32,
+                    self.logits.as_mut_ptr(), rows.len() * VERIFY_MAX * vocab,
+                    proposals.as_mut_ptr(), proposals.len(), widths.as_mut_ptr(),
+                    err.as_mut_ptr().cast(), err.len(),
+                )
+            } else {
+                ffi::ds4_bridge_v41_batch_step(
+                    self.raw.as_ptr(), handles.as_ptr(), tokens.as_ptr(), rows.len() as i32,
+                    self.logits.as_mut_ptr(), rows.len() * vocab,
+                    err.as_mut_ptr().cast(), err.len(),
+                )
             }
-            return Err(ffi_error(&err));
+        };
+        let widths_ok = widths[..rows.len()].iter().all(|&n| (1..=VERIFY_MAX as u32).contains(&n));
+        if rc != 0 || !widths_ok {
+            self.poisoned = true;
+            for (r, _) in rows { r.poisoned = true; }
+            return Err(if rc != 0 { ffi_error(&err) } else { asset_error("invalid native MTP row count") });
         }
-        for ((r, _), logits) in rows
-            .iter_mut()
-            .zip(self.logits[..count].chunks_exact(vocab))
-        {
-            r.logits.copy_from_slice(logits);
+        let mut offset = 0;
+        self.last_rows = 0;
+        for (i, (r, _)) in rows.iter_mut().enumerate() {
+            let n = widths[i] as usize;
+            r.logits.copy_from_slice(&self.logits[offset..offset + vocab]);
+            if self.mtp_mode != 0 {
+                if !r.round.begin(&proposals[i * VERIFY_MAX..i * VERIFY_MAX + n]) {
+                    self.poisoned = true; r.poisoned = true;
+                    return Err(asset_error("overlapping V4.1 verification rounds"));
+                }
+                r.verify_logits[..n * vocab].copy_from_slice(&self.logits[offset..offset + n * vocab]);
+                if n > 1 { r.spec_rounds += 1; r.spec_offered += (n - 1) as u64; }
+            }
+            offset += n * vocab;
+            self.last_rows += n;
         }
         Ok(())
     }
@@ -433,6 +488,35 @@ impl V41Request<'_> {
     }
     pub fn ready(&self) -> bool {
         self.ready
+    }
+
+    /// Called only after this target token passed the real host's grammar,
+    /// EOS, tool-stop and output-budget checks. Future rows are never sampled.
+    pub fn advance_verified(&mut self, token: i32) -> Result<bool> {
+        if self.poisoned { return Err(asset_error("poisoned V4.1 verification")); }
+        if !self.round.accept(token) { return Ok(false); }
+        let vocab = self.logits.len();
+        let offset = self.round.cursor() * vocab;
+        self.logits.copy_from_slice(&self.verify_logits[offset..offset + vocab]);
+        Ok(true)
+    }
+    pub fn finish_round(&mut self) -> Result<()> {
+        let keep = self.round.keep();
+        if keep == 0 { return Ok(()); } // prefill or ordinary decode
+        let mut err = [0u8; 512];
+        // SAFETY: this request exclusively owns its provisional target state.
+        let rc = unsafe {
+            ffi::ds4_bridge_v41_request_commit(
+                self.raw.as_ptr(), keep as u32, err.as_mut_ptr().cast(), err.len(),
+            )
+        };
+        if rc != 0 { self.poisoned = true; return Err(ffi_error(&err)); }
+        self.spec_accepted += (keep - 1) as u64;
+        self.round.clear();
+        Ok(())
+    }
+    pub fn spec_stats(&self) -> (u64, u64, u64) {
+        (self.spec_rounds, self.spec_offered, self.spec_accepted)
     }
 
     /// Common Rust sampler; coins and penalties are request-local. Non-greedy

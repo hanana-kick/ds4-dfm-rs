@@ -1,4 +1,4 @@
-# Experimental V4.1 concurrent serving (fork-only)
+# V4.1 concurrent serving with request-local MTP (fork-only)
 
 Status: **implementation + model-free checks; not GPU-qualified**. Do not
 replace a production endpoint on the strength of host CI. This does not claim
@@ -15,16 +15,20 @@ MTP throughput. `main`'s serial defaults remain unchanged.
 - V4.1 arithmetic: fodelf/YoungAi
   `7fb26cc332d740416792204a29c7d13d2986caf5`,
   `src/core/core_v41_multi.c`, `core_v41_req.c`, `core_v41_state.c` (MIT).
-  The plain packed-row formulation is adapted to this tree's existing
-  `ds4_ds41_forward.inc`. C HTTP, global sampler state, speculative batching
-  and multiple CUDA attention streams are deliberately not imported.
+  The packed-row formulation and snapshot/rollback use this tree's existing
+  `ds4_ds41_forward.inc` and `ds4_ds41_draft.inc`. C HTTP, global sampler
+  state and multiple CUDA attention streams are not imported. Rust owns
+  target sampling, tool syntax, emission and accepted-prefix decisions.
 
-`--max-seqs 2..8` selects ephemeral request states. **C4** is the intended
-initial gate. A decode step packs one token from each ready request into
-shared embedding/dense/HC/MoE/head operations, with independent attention
-caches. This is not a lock around whole-request generation. Attention kernels
-are issued on one owner stream because the inherited backend has shared
-workspace. That is not a throughput guarantee.
+`--max-seqs 2..8` selects request-local states. With `--mtp-mode on`, every
+ready request owns its three-tower drafter and supplies one confirmed token
+plus up to its trained draft block to target verification. The target rows
+are packed into shared embedding/dense/HC/MoE/head operations. For example,
+C4 with five drafts produces 24 target rows in one logical verification step.
+Projection row tiles preserve the existing decode arithmetic; per-request
+attention uses one owner stream because the backend has shared workspace.
+This does not serialize whole requests or disable MTP when C4 is active.
+See [the MTP execution contract](ds41-concurrent-mtp.md).
 
 The request's prefill progresses one existing native chunk per scheduler turn.
 Ready requests also decode in that turn. A new image's tower pass can still
@@ -38,11 +42,11 @@ pause other rows while that pass executes; tower scheduling is not preemptive.
 | Weights | existing VQ/Engram/sidecars | same weights, one model load |
 | KV/Engram history | existing checkpoint path | request-local state/feed/worker |
 | Vision | existing `--vision-gguf` | same preprocessing/tower, per-request image state |
-| MTP | existing embedded DSpark | **must set `--mtp-mode off`** |
+| MTP | existing embedded DSpark | request-local DSpark; `on`, `auto` and `off` |
 | Prefix/disk cache | existing qualified serial surface | **must set `--prefix-reuse off`; no disk cache** |
 | Sampling | existing serial sampler | request-local Rust RNG and generated-token penalties |
 | DSML tools/reasoning | existing HTTP machinery | shared Rust stepper, greedy DSML syntax positions |
-| CUDA graphs | existing serial path | eager packed decode only |
+| CUDA graphs | existing serial path | request-local draft graphs, eager tiled target verification |
 | GPU qualification | original recorded C1 gates | **pending** |
 
 `ephemeral` in capability discovery is not persistent bank admission,
@@ -92,11 +96,10 @@ Vision enabled, `--max-seqs 4`, and `--mtp-mode on` by default. Paths and
 server settings may be overridden through `DS41_*` environment variables.
 No `--ctx` flag is passed because this family reads context from model metadata.
 
-**Engine limitation:** the current concurrent kernel supports C4 without MTP,
-but rejects C4 + MTP. The launcher deliberately requests both and therefore
-will fail until batched speculative verification is implemented. It does not
-silently fall back to C1 or switch MTP off. It does not stop existing servers;
-the requested port must be free.
+The C4 + MTP configuration now has a native draft/verify/rollback path.
+The launcher does not silently fall back to C1 or switch MTP off. It does not
+stop existing servers; the requested port must be free. GPU compilation and
+real-model qualification must be reported separately from host tests.
 
 ## Validation
 

@@ -763,3 +763,11 @@ void ds4_v41_batch_close(struct ds4_v41_batch *b) { (void)b; }
 int ds4_v41_batch_step(struct ds4_v41_batch *b,struct ds4_v41_request **r,const int32_t *t,int n,float *l,size_t f) {
     (void)b;(void)r;(void)t;(void)n;(void)l;(void)f;return 1;
 }
+int ds4_v41_request_set_mtp(struct ds4_v41_request *r,int m,uint32_t v,int g) {
+    (void)r;(void)m;(void)v;(void)g;return 1;
+}
+int ds4_v41_batch_verify(struct ds4_v41_batch *b,struct ds4_v41_request **r,
+        const int32_t *t,int n,float *l,size_t f,int32_t *p,size_t z,uint32_t *w) {
+    (void)b;(void)r;(void)t;(void)n;(void)l;(void)f;(void)p;(void)z;(void)w;return 1;
+}
+int ds4_v41_request_commit(struct ds4_v41_request *r,uint32_t n) { (void)r;(void)n;return 1; }

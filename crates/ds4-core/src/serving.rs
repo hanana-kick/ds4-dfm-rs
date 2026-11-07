@@ -697,7 +697,7 @@ pub fn serving_caps(family: ModelFamily, variant: Variant) -> ServingCaps {
             snapshot: Support::None,
             mtp: MtpKind::Embedded,
             mtp_support: Support::Qualified,
-            spec_lane: SpecLane::Serial,
+            spec_lane: SpecLane::Both,
             spec_draft_min: 1,
             host: HostNeed::Cuda,
             // No session cap exists; the runtime context IS the model
@@ -1362,12 +1362,8 @@ pub fn resolve_plan(
                 "V4.1 multiple requests require the continuous lane",
             ));
         }
-        if req.mtp_mode != MtpMode::Off {
-            issues.push(error(
-                "v41_batch_mtp",
-                "V4.1 concurrent decoding requires explicit --mtp-mode off",
-            ));
-        }
+        // The packed lane executes request-local draft towers and combines
+        // their target verification rows. MTP is no longer a serial-only gate.
         if req.prefix_reuse != PrefixReuse::Off {
             issues.push(error(
                 "v41_batch_reuse",
@@ -1380,7 +1376,7 @@ pub fn resolve_plan(
                 "V4.1 concurrent requests have no disk checkpoint; remove --kv-disk-dir",
             ));
         }
-        issues.push(warn("v41_batch_unqualified", "experimental V4.1 packed lane: plain eager decode, request-local images/Engram, no MTP/reuse/snapshots; GPU qualification pending"));
+        issues.push(warn("v41_batch_unqualified", "V4.1 packed MTP path: request-local draft/verify/rollback, images and Engram; no cross-request reuse/snapshots; GPU qualification pending"));
     }
     let (mtp_mode, mtp_weights) = resolve_mtp(req, caps, facts, driver, &mut issues);
     // A draft below the family minimum allocates no speculative runtime, so
@@ -1638,7 +1634,11 @@ pub fn resolve_plan(
             Support::None
         },
         mtp: if mtp_weights {
-            caps.mtp_support
+            if caps.variant == Variant::DeepSeek41Flash && max_seqs > 1 {
+                Support::Present
+            } else {
+                caps.mtp_support
+            }
         } else {
             Support::None
         },
@@ -2810,7 +2810,7 @@ fn measured_limits(
 fn qualified_note(caps: ServingCaps) -> &'static str {
     match caps.variant {
         Variant::DeepSeek41Flash => {
-            "recorded Spark gates cover greedy single-request embedded speculation with decode graphs (56-token and 1,100-token byte-identical runs and matching engine traces); the sampling profile is not qualified; the artifact fixes the draft block and verification width is scheduled per round (--mtp-draft is unsupported; --dspark-verify pins verification); native prompt-end exact prefix reuse and its KVC disk checkpoint are qualified; --prefix-reuse off|exact|auto controls live and disk reuse (--no-kv-reuse aliases off); partial reuse and persistent banks/snapshots are unavailable; opt-in 2..8 ephemeral requests require --mtp-mode off --prefix-reuse off and have no GPU qualification yet (tests/ds41_concurrent_http_gate.sh); context comes from model metadata, --ctx is rejected"
+            "recorded Spark gates qualify the serial embedded-MTP path; concurrent 2..8 requests implement independent draft towers, packed target verification and per-request rollback with --mtp-mode on|auto|off; concurrent MTP is present, not GPU-qualified; --prefix-reuse off is required for concurrent requests, which have no persistent banks, snapshots or disk KV; the artifact fixes the draft block (--mtp-draft is unsupported; --dspark-verify selects a width); the serial native prompt-end checkpoint and KVC disk restoration remain qualified; context comes from model metadata, --ctx is rejected"
         }
         Variant::NaiveN05Flash => {
             "main-only chunk-2048 buffered retrieval and disk continuation: 256K/two banks, 512K/one bank; draft-loaded and other shapes retain the bounded 8K gate; DSpark acceleration unqualified"
@@ -4246,8 +4246,22 @@ mod tests {
             ModelFamily::DeepSeek4,
             Variant::DeepSeek41Flash,
         );
-        assert!(p.issues.iter().any(|i| i.code == "v41_batch_mtp"));
+        assert!(!p.issues.iter().any(|i| i.code == "v41_batch_mtp"));
         assert!(p.issues.iter().any(|i| i.code == "v41_batch_reuse"));
+        for width in [2, 4, 8] {
+            for mode in [MtpMode::Off, MtpMode::Auto, MtpMode::On] {
+                let p = plan(ServingRequest {
+                    max_seqs: MaxSeqs::Fixed(width), mtp_mode: mode,
+                    prefix_reuse: PrefixReuse::Off, ..ServingRequest::default()
+                }, ModelFamily::DeepSeek4, Variant::DeepSeek41Flash);
+                assert!(!p.has_errors(), "width={width} mode={mode:?}: {:?}", p.issues);
+                assert_eq!(p.effective.max_seqs, width);
+                assert_eq!(p.effective.mtp_mode, mode);
+                assert!(!p.uses_serial_mtp());
+                assert!(p.wants_bank_lane());
+                if mode != MtpMode::Off { assert_eq!(p.qualified.mtp, Support::Present); }
+            }
+        }
         let p = plan(
             ServingRequest {
                 prefix_reuse: PrefixReuse::Partial,
@@ -4268,7 +4282,7 @@ mod tests {
         assert_eq!(caps.snapshot, Support::None);
         assert_eq!(caps.mtp, MtpKind::Embedded);
         assert_eq!(caps.mtp_support, Support::Qualified);
-        assert_eq!(caps.spec_lane, SpecLane::Serial);
+        assert_eq!(caps.spec_lane, SpecLane::Both);
         assert_eq!(caps.ctx_max, None);
         assert_eq!(caps.qualified_banks, Some(1));
 

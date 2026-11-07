@@ -18,6 +18,7 @@ BOOT_TIMEOUT="${DS41_TEST_BOOT_TIMEOUT:-600}"
 REQUEST_TIMEOUT="${DS41_TEST_REQUEST_TIMEOUT:-900}"
 TOKENS="${DS41_TEST_MAX_TOKENS:-2048}"
 EFFORT="${DS41_TEST_REASONING_EFFORT:-high}"
+DIAGNOSE="${DS41_TEST_DIAGNOSE:-off}"
 MODEL_ID="${DS41_MODEL_ID:-big}"
 MEM_BUDGET="${DS41_MEM_BUDGET_MB:-110000}"
 MEM_FLOOR="${DS41_MEM_FLOOR_GB:-2}"
@@ -31,6 +32,7 @@ usage() {
 Usage: bash tests/ds41_repetition_gate.sh [IMAGE.png|IMAGE.jpg]
   Starts independent local servers for c1-off c1-on c4-off c4-on.
   A supplied image reproduces the vision+thinking path (recommended).
+  DS41_TEST_DIAGNOSE=on runs a sequential C1/MTP-off A-E sampler matrix.
 
 Requires: built ./ds4-server, downloaded iVQ/Engram/Vision, curl, jq,
           Perl JSON::PP, ss, file, base64. Stop an existing model server first
@@ -42,6 +44,7 @@ Environment:
   DS41_TEST_PORT=18043
   DS41_TEST_MAX_TOKENS=2048
   DS41_TEST_REASONING_EFFORT=high (none|low|high|max)
+  DS41_TEST_DIAGNOSE=on (C1, MTP off; A-E matrix; returns 0 on HTTP success)
   DS41_TEST_TEXT_PROMPT=... / DS41_TEST_IMAGE_PROMPT=...
   DS41_TEST_OUT=/fresh/results/dir
   DS41_TEST_BOOT_TIMEOUT=600 / DS41_TEST_REQUEST_TIMEOUT=900
@@ -80,6 +83,7 @@ for v in "$BOOT_TIMEOUT" "$REQUEST_TIMEOUT" "$TOKENS"; do
   [[ "$v" =~ ^[1-9][0-9]*$ ]] || die 'timeouts and max_tokens must be positive integers'
 done
 case "$EFFORT" in none|low|high|max) ;; *) die 'DS41_TEST_REASONING_EFFORT must be none|low|high|max' ;; esac
+case "$DIAGNOSE" in on|off) ;; *) die 'DS41_TEST_DIAGNOSE must be on|off' ;; esac
 [[ -n "$MODEL_ID" ]] || die 'DS41_MODEL_ID may not be empty'
 [[ -x "$BIN" ]] || die "build the server first: ./scripts/build.sh (missing $BIN)"
 [[ -s "$MODEL" && -d "$ENGRAM" && -s "$VISION" ]] || die 'model/Engram/Vision missing: ./scripts/download-model.sh'
@@ -92,6 +96,7 @@ if [[ -n "$IMAGE" ]]; then
   [[ "$MIME" == image/png || "$MIME" == image/jpeg ]] || die 'image must be PNG or JPEG'
 fi
 read -r -a MODES <<< "${DS41_TEST_MODES:-c1-off c1-on c4-off c4-on}"
+if [[ "$DIAGNOSE" == on ]]; then MODES=(c1-off); fi
 (( ${#MODES[@]} > 0 )) || die 'DS41_TEST_MODES is empty'
 declare -A SEEN=()
 for mode in "${MODES[@]}"; do
@@ -163,18 +168,68 @@ request() {
 }
 
 analyse() {
-  local mode=$1 case_id=$2
+  local mode=$1 case_id=$2 effort=${3:-$EFFORT}
   local path="$OUT/$mode/$case_id"
   if [[ ! -s "$path.response.json" ]]; then
     printf '%s\n' '{"error":{"message":"transport failure or empty response"}}' > "$path.response.json"
   fi
-  perl -x "$ANALYZER" "$path.response.json" "$mode" "$case_id" > "$path.analysis.json"
+  perl -x "$ANALYZER" "$path.response.json" "$mode" "$case_id" "$effort" > "$path.analysis.json"
   jq -r '.choices[0].message.reasoning_content // .choices[0].message.reasoning // empty' \
     "$path.response.json" > "$path.thinking.txt" 2>/dev/null || true
   jq -r '.choices[0].message.content // empty' \
     "$path.response.json" > "$path.answer.txt" 2>/dev/null || true
   cat "$path.analysis.json" >> "$OUT/summary.jsonl"
 }
+
+# Controlled sampler diagnosis. All profiles share one C1/MTP-off server.
+# A is the original failure; B isolates temperature; C/D vary the
+# reasoning budget/effort; E disables thinking. No stochastic parity test.
+if [[ "$DIAGNOSE" == on ]]; then
+  : > "$OUT/summary.jsonl"
+  printf 'profile\ttemperature\tthinking\trequested_tokens\tstatus\tfinish\tthinking_chars\tanswer_chars\tduplicate_windows\ttruncated\treasoning_exposed\tfinal_answer_present\n' > "$OUT/diagnostics.tsv"
+
+  if ! boot c1-off; then
+    die "serial diagnostic server failed: $OUT/c1-off/server.log"
+  fi
+
+  diag_kind=text
+  if [[ -n "$IMAGE" ]]; then diag_kind=image; fi
+  diag_transport=0
+  for profile in A B C D E; do
+    case "$profile" in
+      A) temp=0; effort=high; limit=2048 ;;
+      B) temp=1.0; effort=high; limit=2048 ;;
+      C) temp=1.0; effort=high; limit=8192 ;;
+      D) temp=1.0; effort=low; limit=8192 ;;
+      E) temp=1.0; effort=none; limit=512 ;;
+    esac
+
+    jq --argjson temp "$temp" --arg effort "$effort" --argjson limit "$limit" \
+      '.temperature=$temp | .top_p=1.0 | .min_p=0 | .reasoning_effort=$effort | .max_tokens=$limit' \
+      "$OUT/payloads/$diag_kind.json" > "$OUT/payloads/diag-$profile.json"
+    if ! request "diag-$profile" "$OUT/c1-off/diag-$profile"; then
+      diag_transport=$((diag_transport + 1))
+    fi
+    analyse c1-off "diag-$profile" "$effort"
+
+    jq -r --arg profile "$profile" --arg temp "$temp" --arg effort "$effort" --argjson limit "$limit" \
+      '[$profile,$temp,$effort,($limit|tostring),.status,.finish_reason,
+        (.reasoning_chars|tostring),(.answer_chars|tostring),
+        (.reasoning_duplicate_windows|tostring),(.truncated|tostring),
+        (.reasoning_exposed|tostring),(.final_answer_present|tostring)] | @tsv' \
+      "$OUT/c1-off/diag-$profile.analysis.json" >> "$OUT/diagnostics.tsv"
+  done
+
+  stop_server
+  cat "$OUT/diagnostics.tsv"
+  printf '[ds41-repeat] diagnostic evidence: %s\n' "$OUT"
+  if (( diag_transport > 0 )); then
+    printf '[ds41-repeat] FAIL: %s HTTP request(s) failed\n' "$diag_transport" >&2
+    exit 1
+  fi
+  printf '[ds41-repeat] DIAGNOSTIC COMPLETE: classifications are not a quality PASS\n'
+  exit 0
+fi
 
 : > "$OUT/summary.jsonl"
 transport_failures=0
@@ -313,7 +368,8 @@ sub loop_metrics {
     };
 }
 sub classify {
-    my ($payload, $mode, $case) = @_;
+    my ($payload, $mode, $case, $effort) = @_;
+    $effort //= 'high';
     my $choice = ref($payload->{choices}) eq 'ARRAY' ? $payload->{choices}[0] : undef;
     my $message = ref($choice) eq 'HASH' ? $choice->{message} : undef;
     my $reasoning = ref($message) eq 'HASH' ? ($message->{reasoning_content} // $message->{reasoning} // '') : '';
@@ -324,7 +380,7 @@ sub classify {
     my $content = loop_metrics($answer);
     my $finish = ref($choice) eq 'HASH' ? ($choice->{finish_reason} // '') : '';
     my $call_ok = JSON::PP::false;
-    if ($case =~ /^tool/ && ref($message) eq 'HASH' && ref($message->{tool_calls}) eq 'ARRAY') {
+    if ($case =~ /^tool/ && ref($message) eq 'HASH' && ref($message->{tool_calls}) eq 'ARRAY' && @{$message->{tool_calls}} == 1) {
         my $call = $message->{tool_calls}[0];
         if (ref($call) eq 'HASH' && ref($call->{function}) eq 'HASH' && ($call->{function}{name} // '') eq 'test_echo') {
             my $args = eval { JSON::PP->new->decode($call->{function}{arguments} // '{}') };
@@ -344,7 +400,7 @@ sub classify {
         $status = 'tool_failure';
     } elsif ($case !~ /^tool/ && $answer !~ /\S/) {
         $status = 'no_final_answer';
-    } elsif ($reasoning eq '') {
+    } elsif ($reasoning eq '' && $effort ne 'none' && $case !~ /^tool/) {
         $status = 'reasoning_not_exposed';
     }
     my $usage = $payload->{usage};
@@ -356,6 +412,9 @@ sub classify {
         reasoning_duplicate_windows => $reason->{repeated_window_positions},
         answer_repeat_copies => $content->{maximum_nonoverlapping_copies},
         reasoning_loop => $reason->{loop}, answer_loop => $content->{loop},
+        reasoning_exposed => $reason->{characters} > 0 ? JSON::PP::true : JSON::PP::false,
+        final_answer_present => $answer =~ /\S/ ? JSON::PP::true : JSON::PP::false,
+        truncated => $finish eq 'length' ? JSON::PP::true : JSON::PP::false,
         tool_ok => $call_ok,
         completion_tokens => ref($usage) eq 'HASH' ? ($usage->{completion_tokens} // 0) : 0,
         error_message => ref($payload->{error}) eq 'HASH' ? ($payload->{error}{message} // 'server error') : '',
@@ -378,11 +437,19 @@ if (@ARGV == 1 && $ARGV[0] eq '--self-test') {
     die "thinking without final answer not detected\n" unless $unfinished->{status} eq 'no_final_answer';
     my $nonascii = classify({choices=>[{finish_reason=>'length',message=>{reasoning_content=>('노란색 바탕에서 눈과 입의 모양만 다시 검토합니다. ' x 30),content=>''}}]},'c1-on','image-1');
     die "unicode repetition not detected\n" unless $nonascii->{status} eq 'repetition';
-    print "repetition-analyzer: 7 self-tests PASS\n";
+    my $no_thinking = classify({choices=>[{finish_reason=>'stop',message=>{content=>'An icon.'}}]},'c1-off','diag-E','none');
+    die "thinking-off falsely rejected\n" unless $no_thinking->{status} eq 'ok' && $no_thinking->{final_answer_present};
+    my $missing_thinking = classify({choices=>[{finish_reason=>'stop',message=>{content=>'An icon.'}}]},'c1-off','diag-B','high');
+    die "missing thinking not detected\n" unless $missing_thinking->{status} eq 'reasoning_not_exposed';
+    my $tool_no_reason = classify({choices=>[{finish_reason=>'tool_calls',message=>{content=>'',tool_calls=>[{function=>{name=>'test_echo',arguments=>'{"value":"ping"}'}}]}}]},'c1-off','tool-1');
+    die "valid tool call without exposed thinking rejected\n" unless $tool_no_reason->{status} eq 'ok';
+    my $double_call = classify({choices=>[{finish_reason=>'tool_calls',message=>{content=>'',tool_calls=>[{function=>{name=>'test_echo',arguments=>'{"value":"ping"}'}},{function=>{name=>'test_echo',arguments=>'{"value":"ping"}'}}]}}]},'c1-off','tool-1');
+    die "duplicate tool calls not detected\n" unless $double_call->{status} eq 'tool_failure';
+    print "repetition-analyzer: 11 self-tests PASS\n";
     exit 0;
 }
-@ARGV == 3 or die "Usage: $0 RESPONSE.json MODE CASE | --self-test\n";
-my ($path, $mode, $case) = @ARGV;
+@ARGV == 3 || @ARGV == 4 or die "Usage: $0 RESPONSE.json MODE CASE [EFFORT] | --self-test\n";
+my ($path, $mode, $case, $effort) = @ARGV;
 open my $fh, '<:raw', $path or die "open $path: $!\n";
 local $/;
 my $bytes = <$fh>;
@@ -390,7 +457,7 @@ my $payload = eval { JSON::PP->new->utf8->decode($bytes) };
 if ($@ || ref($payload) ne 'HASH') {
     $payload = {error => {message => 'invalid/empty JSON response'}};
 }
-my $report = classify($payload, $mode, $case);
+my $report = classify($payload, $mode, $case, $effort);
 print JSON::PP->new->canonical->utf8->encode($report), "\n";
 
 __END__

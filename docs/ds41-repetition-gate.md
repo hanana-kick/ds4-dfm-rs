@@ -22,6 +22,39 @@ Classification: `repetition` detects repeating 100-character Unicode windows (a 
 
 A successful test requires usable reasoning, appropriate EOS/tool finish, no detected repetition, real C4 and MTP activity in server logs, and no observed temperature-0 parity drift. It is **not** a proof of model accuracy or long-term CUDA stability. Exit 1 on failure, retaining all evidence.
 
+## C1 sampler/thinking diagnosis (A-E)
+
+This mode runs five **sequential** requests on one C1 server with MTP
+disabled. Supply the original image to reproduce the Vision path:
+
+```bash
+DS41_TEST_DIAGNOSE=on DS41_TEST_IMAGE=/path/to/logo.png \
+  bash tests/ds41_repetition_gate.sh
+```
+
+Without the image, each profile uses the same text-only prompt.
+The script always uses \`top_p=1.0\` and \`min_p=0\` in this mode.
+
+| Profile | Temperature | Reasoning effort | Max tokens | Purpose |
+|---|---:|---|---:|---|
+| A | 0 | high | 2048 | Reproduce greedy baseline |
+| B | 1.0 | high | 2048 | Isolate sampling effect |
+| C | 1.0 | high | 8192 | Check output-budget limitation |
+| D | 1.0 | low | 8192 | Compare reasoning effort |
+| E | 1.0 | none | 512 | Check non-thinking path |
+
+Produces \`diagnostics.tsv\`, \`summary.jsonl\`, original requests and
+responses, per-profile thinking/answer text, and one server log. Results
+separately report repeated **character** windows, truncation, exposed
+reasoning and final-answer presence; they do not measure repeated token IDs.
+No parity is asserted across stochastic profiles. Exit 0 indicates completed
+HTTP requests, **not** model-quality success; an HTTP failure returns exit 1.
+
+In the normal C1/C4 gate, a correctly framed tool call no longer fails
+merely because its reasoning field is absent. The tool test requires
+**exactly one** valid \`test_echo(value=ping)\` call. Requests explicitly
+using \`reasoning_effort=none\` do not require a reasoning field.
+
 ## Focused runs
 
 ```bash

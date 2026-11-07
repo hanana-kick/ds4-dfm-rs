@@ -33,7 +33,7 @@ DS41_TEST_DIAGNOSE=on DS41_TEST_IMAGE=/path/to/logo.png \
 ```
 
 Without the image, each profile uses the same text-only prompt.
-The script always uses \`top_p=1.0\` and \`min_p=0\` in this mode.
+The script always uses `top_p=1.0` and `min_p=0` in this mode.
 
 | Profile | Temperature | Reasoning effort | Max tokens | Purpose |
 |---|---:|---|---:|---|
@@ -43,7 +43,7 @@ The script always uses \`top_p=1.0\` and \`min_p=0\` in this mode.
 | D | 1.0 | low | 8192 | Compare reasoning effort |
 | E | 1.0 | none | 512 | Check non-thinking path |
 
-Produces \`diagnostics.tsv\`, \`summary.jsonl\`, original requests and
+Produces `diagnostics.tsv`, `summary.jsonl`, original requests and
 responses, per-profile thinking/answer text, and one server log. Results
 separately report repeated **character** windows, truncation, exposed
 reasoning and final-answer presence; they do not measure repeated token IDs.
@@ -52,8 +52,8 @@ HTTP requests, **not** model-quality success; an HTTP failure returns exit 1.
 
 In the normal C1/C4 gate, a correctly framed tool call no longer fails
 merely because its reasoning field is absent. The tool test requires
-**exactly one** valid \`test_echo(value=ping)\` call. Requests explicitly
-using \`reasoning_effort=none\` do not require a reasoning field.
+**exactly one** valid `test_echo(value=ping)` call. Requests explicitly
+using `reasoning_effort=none` do not require a reasoning field.
 
 ## Focused runs
 

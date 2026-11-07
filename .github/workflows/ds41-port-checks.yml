@@ -71,7 +71,9 @@ jobs:
           cargo --version >> host-inputs/rust-version.txt
           toolchain=$(dirname "$(dirname "$(rustup which rustc)")")
           tar -czf host-inputs/rust-toolchain.tar.gz -C "$toolchain" .
-          tar -czf host-inputs/cargo-registry.tar.gz -C "$HOME/.cargo" registry git
+          paths=(registry)
+          if test -d "$HOME/.cargo/git"; then paths+=(git); fi
+          tar -czf host-inputs/cargo-registry.tar.gz -C "$HOME/.cargo" "${paths[@]}"
           sha256sum host-inputs/*.tar.gz > host-inputs/SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:

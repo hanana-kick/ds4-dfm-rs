@@ -35,5 +35,9 @@ jobs:
           cc -fsyntax-only -std=c99 -D_GNU_SOURCE -I. native/bridge/ds4_bridge.c
           cc -O1 -g -std=c11 -D_GNU_SOURCE -fsanitize=address,undefined -ffunction-sections -fdata-sections -I. tests/test_ds41_batch_lifetime.c -Wl,--gc-sections -o /tmp/ds41-batch-lifetime
           /tmp/ds41-batch-lifetime
+      - name: Repetition gate syntax and detector self-tests
+        run: |
+          bash -n tests/ds41_repetition_gate.sh
+          perl -x tests/ds41_repetition_gate.sh --self-test
       - name: Qualification boundary
         run: echo 'Host checks only. No GPU, model, throughput, C4 logits or concurrent-vision qualification.'

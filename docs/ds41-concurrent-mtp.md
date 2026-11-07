@@ -97,3 +97,7 @@ four-request target step with more than four verification rows, and actual
 MTP offered-token counters. Starting the listener alone cannot pass it.
 All requests/responses/logs are retained. It runs on an unused loopback port
 and stops only the process it created. This gate has not been run here.
+
+## Thinking repetition and parity
+
+Run `bash tests/ds41_repetition_gate.sh /path/to/reproducing-image.png` on the model host. It starts the existing server launcher for C1/C4 × MTP ON/OFF and records raw reasoning, repeated spans, token-limit exhaustion, tools, and temperature-0 parity. See [repetition gate](ds41-repetition-gate.md). It never stops unrelated processes.

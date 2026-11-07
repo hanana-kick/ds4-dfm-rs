@@ -1,0 +1,42 @@
+name: DS41 concurrency port checks
+
+on:
+  push:
+    branches: [feat/ds41-entrpi-concurrency]
+  pull_request:
+    branches: [main]
+    paths:
+      - '**ds41**'
+      - 'crates/ds4-core/**'
+      - 'crates/ds4-server/**'
+      - 'crates/ds4-sys/**'
+      - '.github/workflows/ds41-port-checks.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ds41-port-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source-record:
+    if: github.repository == 'hanana-kick/ds4-dfm-rs'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Record exact source
+        run: |
+          git rev-parse HEAD > source-commit.txt
+          git archive --format=tar.gz --output=ds41-source.tar.gz HEAD
+          sha256sum ds41-source.tar.gz > ds41-source.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ds41-port-source
+          path: |
+            source-commit.txt
+            ds41-source.tar.gz
+            ds41-source.sha256
+          retention-days: 7

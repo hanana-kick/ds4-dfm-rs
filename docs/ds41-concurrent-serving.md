@@ -76,35 +76,27 @@ output parity is a mandatory real-GPU gate.
 
 ## Build and run on the Spark
 
-Use the exact same base GGUF, Engram shards, matching GR/RB directory and vision
-sidecar that already work with the serial engine. No new quantization is
-performed. In your checkout of this fork:
+The model, build and server startup each have one script. From the root of
+the fork checkout:
 
 ```bash
-git fetch origin feat/ds41-entrpi-concurrency
-git switch feat/ds41-entrpi-concurrency
-make cuda-spark
-
-# Set these to existing artifact paths. Do not point this at REXL3 weights.
-MODEL=/path/to/DeepSeek-V4.1-Flash-vq8sh14-q4k-mtpnative.gguf
-ENGRAM=/path/to/engram
-VISION=/path/to/DeepSeek-V4.1-Flash.vision.gguf
-CODE_GR=/path/to/grrb-code_fit_n15360-engine
-
-./ds4-server --cuda -m "$MODEL" \
-  --engram-dir "$ENGRAM" --zchain "$CODE_GR" --vision-gguf "$VISION" \
-  --mem-budget-mb 110000 --mem-floor-gb 2 \
-  --max-seqs 4 --mtp-mode off --prefix-reuse off \
-  --host 127.0.0.1 --port 8000 --model-id big --no-update-check
+bash scripts/download-model.sh
+bash scripts/build.sh
+bash scripts/serve.sh
 ```
 
-Do not pass `--ctx`: V4.1 uses its metadata context. Stop any existing model
-server first; this command does not stop it. Only change the host to `0.0.0.0`
-behind appropriate network access controls. This first patch does not carry
-MTP into the concurrent lane; keep `--max-seqs 1` to use the original path.
+The model downloader installs the iVQ GGUF, the matching 1017 Engram shards,
+and Vision sidecar under `~/AI/models/ds41-1017-ivq`. The build script runs
+`make cuda-spark`. The server script uses model ID `big`, port `8000`,
+Vision enabled, `--max-seqs 4`, and `--mtp-mode on` by default. Paths and
+server settings may be overridden through `DS41_*` environment variables.
+No `--ctx` flag is passed because this family reads context from model metadata.
 
-Look for `[v41-batch] packed_decode rows=4`, **not merely** `width=4`. The
-former records an executed packed step; the latter is only configuration.
+**Engine limitation:** the current concurrent kernel supports C4 without MTP,
+but rejects C4 + MTP. The launcher deliberately requests both and therefore
+will fail until batched speculative verification is implemented. It does not
+silently fall back to C1 or switch MTP off. It does not stop existing servers;
+the requested port must be free.
 
 ## Validation
 

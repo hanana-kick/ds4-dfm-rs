@@ -24,7 +24,11 @@ MEM_BUDGET="${DS41_MEM_BUDGET_MB:-110000}"
 MEM_FLOOR="${DS41_MEM_FLOOR_GB:-2}"
 TEXT_PROMPT="${DS41_TEST_TEXT_PROMPT:-이게 뭔가요? 노란 배경의 아이콘에 검은 타원형 눈 두 개, 쉼표 같은 코, 곡선형 입이 있습니다. 확실하지 않으면 추측이라고 명시하고 간결하게 답하세요.}"
 IMAGE_PROMPT="${DS41_TEST_IMAGE_PROMPT:-이게 뭔가요? 보이는 특징을 기준으로 판단하고 최종 답변을 간결하게 제시하세요.}"
+FIXTURE_IMAGE="$ROOT/tests/fixtures/ds41-repetition/yellow-face.png"
 IMAGE="${DS41_TEST_IMAGE:-${1:-}}"
+if [[ "$DIAGNOSE" == on && -z "$IMAGE" && "${DS41_TEST_TEXT_ONLY:-off}" != on ]]; then
+  IMAGE="$FIXTURE_IMAGE"
+fi
 SERVER_PID=''
 
 usage() {
@@ -33,18 +37,20 @@ Usage: bash tests/ds41_repetition_gate.sh [IMAGE.png|IMAGE.jpg]
   Starts independent local servers for c1-off c1-on c4-off c4-on.
   A supplied image reproduces the vision+thinking path (recommended).
   DS41_TEST_DIAGNOSE=on runs a sequential C1/MTP-off A-E sampler matrix.
+  It defaults to tests/fixtures/ds41-repetition/yellow-face.png.
 
 Requires: built ./ds4-server, downloaded iVQ/Engram/Vision, curl, jq,
           Perl JSON::PP, ss, file, base64. Stop an existing model server first
           if it holds the DGX Spark model lock/memory; this test never kills it.
 
 Environment:
-  DS41_TEST_IMAGE=path/to/original.png
+  DS41_TEST_IMAGE=path/to/original.png (overrides bundled image)
   DS41_TEST_MODES='c1-off c1-on c4-off c4-on' (space-separated subset)
   DS41_TEST_PORT=18043
   DS41_TEST_MAX_TOKENS=2048
   DS41_TEST_REASONING_EFFORT=high (none|low|high|max)
   DS41_TEST_DIAGNOSE=on (C1, MTP off; A-E matrix; returns 0 on HTTP success)
+  DS41_TEST_TEXT_ONLY=on (diagnostic mode: skip bundled image when no image given)
   DS41_TEST_TEXT_PROMPT=... / DS41_TEST_IMAGE_PROMPT=...
   DS41_TEST_OUT=/fresh/results/dir
   DS41_TEST_BOOT_TIMEOUT=600 / DS41_TEST_REQUEST_TIMEOUT=900
@@ -84,6 +90,7 @@ for v in "$BOOT_TIMEOUT" "$REQUEST_TIMEOUT" "$TOKENS"; do
 done
 case "$EFFORT" in none|low|high|max) ;; *) die 'DS41_TEST_REASONING_EFFORT must be none|low|high|max' ;; esac
 case "$DIAGNOSE" in on|off) ;; *) die 'DS41_TEST_DIAGNOSE must be on|off' ;; esac
+case "${DS41_TEST_TEXT_ONLY:-off}" in on|off) ;; *) die 'DS41_TEST_TEXT_ONLY must be on|off' ;; esac
 [[ -n "$MODEL_ID" ]] || die 'DS41_MODEL_ID may not be empty'
 [[ -x "$BIN" ]] || die "build the server first: ./scripts/build.sh (missing $BIN)"
 [[ -s "$MODEL" && -d "$ENGRAM" && -s "$VISION" ]] || die 'model/Engram/Vision missing: ./scripts/download-model.sh'

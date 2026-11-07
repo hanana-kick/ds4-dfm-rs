@@ -25,15 +25,29 @@ A successful test requires usable reasoning, appropriate EOS/tool finish, no det
 ## C1 sampler/thinking diagnosis (A-E)
 
 This mode runs five **sequential** requests on one C1 server with MTP
-disabled. Supply the original image to reproduce the Vision path:
+disabled. It uses the committed
+[`yellow-face.png`](../tests/fixtures/ds41-repetition/yellow-face.png) by
+default. The 256×256 PNG is a **synthetic approximation**, not the original
+image that triggered the failure. Its editable source is
+[`yellow-face.svg`](../tests/fixtures/ds41-repetition/yellow-face.svg).
 
 ```bash
-DS41_TEST_DIAGNOSE=on DS41_TEST_IMAGE=/path/to/logo.png \
+# Reproducible repository fixture; no external image path required
+DS41_TEST_DIAGNOSE=on bash tests/ds41_repetition_gate.sh
+
+# Reproduce the actual failing image when available
+DS41_TEST_DIAGNOSE=on DS41_TEST_IMAGE=/path/to/original.png \
+  bash tests/ds41_repetition_gate.sh
+
+# Keep text-only diagnosis available
+DS41_TEST_DIAGNOSE=on DS41_TEST_TEXT_ONLY=on \
   bash tests/ds41_repetition_gate.sh
 ```
 
-Without the image, each profile uses the same text-only prompt.
-The script always uses `top_p=1.0` and `min_p=0` in this mode.
+The script uses `top_p=1.0` and `min_p=0` in diagnostic mode.
+The standard C1/C4 gate remains text-only by default; pass
+`DS41_TEST_IMAGE=tests/fixtures/ds41-repetition/yellow-face.png`
+to test its Vision path.
 
 | Profile | Temperature | Reasoning effort | Max tokens | Purpose |
 |---|---:|---|---:|---|

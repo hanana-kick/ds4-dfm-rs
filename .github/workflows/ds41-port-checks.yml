@@ -1,82 +1,39 @@
 name: DS41 concurrency port checks
-
 on:
   push:
     branches: [feat/ds41-entrpi-concurrency]
   pull_request:
     branches: [main]
-    paths:
-      - '**ds41**'
-      - 'crates/ds4-core/**'
-      - 'crates/ds4-server/**'
-      - 'crates/ds4-sys/**'
-      - '.github/workflows/ds41-port-checks.yml'
   workflow_dispatch:
-
 permissions:
   contents: read
-
 concurrency:
   group: ds41-port-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
-  source-record:
+  host-validation:
     if: github.repository == 'hanana-kick/ds4-dfm-rs'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - name: Record exact source
-        run: |
-          mkdir -p record
-          git rev-parse HEAD > record/source-commit.txt
-          git archive --format=tar.gz --output=record/ds41-source.tar.gz HEAD
-      - uses: actions/checkout@v4
-        with:
-          repository: Entrpi/ds4
-          ref: addc0c4bd6c664f8eed556df5c41f17990dcfcb6
-          path: reference-entrpi
-          persist-credentials: false
-      - uses: actions/checkout@v4
-        with:
-          repository: fodelf/YoungAi
-          ref: 7fb26cc332d740416792204a29c7d13d2986caf5
-          path: reference-youngai
-          persist-credentials: false
-      - name: Record donor revisions
-        run: |
-          git -C reference-entrpi archive --format=tar.gz --output="$PWD/record/entrpi-v0.6.5.tar.gz" HEAD
-          git -C reference-youngai archive --format=tar.gz --output="$PWD/record/youngai-reference.tar.gz" HEAD
-          sha256sum record/*.tar.gz > record/SHA256SUMS
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ds41-port-sources
-          path: record/
-          retention-days: 7
-  host-inputs:
-    if: github.repository == 'hanana-kick/ds4-dfm-rs'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install pinned Rust toolchain
+      - name: Install pinned Rust
         run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
-      - name: Fetch locked host dependencies
-        run: cargo fetch --locked
-      - name: Archive offline host inputs (no credentials)
+      - name: Host test dependencies
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Format and native-feature type checking
         run: |
-          mkdir -p host-inputs
-          rustc --version > host-inputs/rust-version.txt
-          cargo --version >> host-inputs/rust-version.txt
-          toolchain=$(dirname "$(dirname "$(rustup which rustc)")")
-          tar -czf host-inputs/rust-toolchain.tar.gz -C "$toolchain" .
-          paths=(registry)
-          if test -d "$HOME/.cargo/git"; then paths+=(git); fi
-          tar -czf host-inputs/cargo-registry.tar.gz -C "$HOME/.cargo" "${paths[@]}"
-          sha256sum host-inputs/*.tar.gz > host-inputs/SHA256SUMS
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ds41-host-inputs
-          path: host-inputs/
-          retention-days: 2
+          cargo fmt --all -- --check
+          cargo check --locked -p ds4-server --features native
+      - name: Serialized workspace regression tests
+        run: make ci-rust
+      - name: Model-free native bridge and syntax checks
+        run: |
+          make test-ds41-bridge-lifetime test-ds41-batch-lifetime
+          cc -fsyntax-only -std=c99 -D_GNU_SOURCE ds4.c
+          cc -fsyntax-only -std=c99 -D_GNU_SOURCE -DDS4_NO_GPU ds4.c
+          cc -fsyntax-only -std=c99 -D_GNU_SOURCE -I. native/bridge/ds4_bridge.c
+          cc -O1 -g -std=c11 -D_GNU_SOURCE -fsanitize=address,undefined -ffunction-sections -fdata-sections -I. tests/test_ds41_batch_lifetime.c -Wl,--gc-sections -o /tmp/ds41-batch-lifetime
+          /tmp/ds41-batch-lifetime
+      - name: Qualification boundary
+        run: echo 'Host checks only. No GPU, model, throughput, C4 logits or concurrent-vision qualification.'

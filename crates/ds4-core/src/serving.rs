@@ -2810,7 +2810,7 @@ fn measured_limits(
 fn qualified_note(caps: ServingCaps) -> &'static str {
     match caps.variant {
         Variant::DeepSeek41Flash => {
-            "recorded Spark gates qualify the serial embedded-MTP path; concurrent 2..8 requests implement independent draft towers, packed target verification and per-request rollback with --mtp-mode on|auto|off; concurrent MTP is present, not GPU-qualified; --prefix-reuse off is required for concurrent requests, which have no persistent banks, snapshots or disk KV; the artifact fixes the draft block (--mtp-draft is unsupported; --dspark-verify selects a width); the serial native prompt-end checkpoint and KVC disk restoration remain qualified; context comes from model metadata, --ctx is rejected"
+            "recorded Spark gates qualify the serial embedded-MTP path; concurrent 2..8 requests implement independent draft towers, packed target verification and per-request rollback with --mtp-mode on|auto|off; concurrent MTP is present, not GPU-qualified; --prefix-reuse off is required for concurrent requests, which have no persistent banks, snapshots or disk KV; the artifact fixes the draft block (--mtp-draft is unsupported; --dspark-verify selects a width); the serial --prefix-reuse off|exact|auto controls retain the qualified native prompt-end checkpoint and KVC disk restoration on exact/auto; context comes from model metadata, --ctx is rejected"
         }
         Variant::NaiveN05Flash => {
             "main-only chunk-2048 buffered retrieval and disk continuation: 256K/two banks, 512K/one bank; draft-loaded and other shapes retain the bounded 8K gate; DSpark acceleration unqualified"

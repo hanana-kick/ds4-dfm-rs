@@ -83,7 +83,7 @@ candidate. These are scheduler controls, not measurements or speed claims.
 
 ## Qualification notes
 
-- **DeepSeek V4.1 Flash:** recorded Spark gates qualify the serial embedded-MTP path; concurrent 2..8 requests implement independent draft towers, packed target verification and per-request rollback with --mtp-mode on|auto|off; concurrent MTP is present, not GPU-qualified; --prefix-reuse off is required for concurrent requests, which have no persistent banks, snapshots or disk KV; the artifact fixes the draft block (--mtp-draft is unsupported; --dspark-verify selects a width); the serial native prompt-end checkpoint and KVC disk restoration remain qualified; context comes from model metadata, --ctx is rejected.
+- **DeepSeek V4.1 Flash:** recorded Spark gates qualify the serial embedded-MTP path; concurrent 2..8 requests implement independent draft towers, packed target verification and per-request rollback with --mtp-mode on|auto|off; concurrent MTP is present, not GPU-qualified; --prefix-reuse off is required for concurrent requests, which have no persistent banks, snapshots or disk KV; the artifact fixes the draft block (--mtp-draft is unsupported; --dspark-verify selects a width); the serial --prefix-reuse off|exact|auto controls retain the qualified native prompt-end checkpoint and KVC disk restoration on exact/auto; context comes from model metadata, --ctx is rejected.
 - **K-EXAONE 236B A23B:** LLLG ring rewind and partial checkpoints qualified.
 - **dots3-note-prev:** serial MTP is present but unqualified.
 - **Qwen3.8-Flash-Next:** common UX baseline; configured values and verified combinations differ.

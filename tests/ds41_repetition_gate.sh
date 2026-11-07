@@ -342,6 +342,8 @@ sub classify {
         $status = 'unexpected_finish';
     } elsif ($case =~ /^tool/ && ($finish ne 'tool_calls' || !$call_ok)) {
         $status = 'tool_failure';
+    } elsif ($case !~ /^tool/ && $answer !~ /\S/) {
+        $status = 'no_final_answer';
     } elsif ($reasoning eq '') {
         $status = 'reasoning_not_exposed';
     }
@@ -372,9 +374,11 @@ if (@ARGV == 1 && $ARGV[0] eq '--self-test') {
     die "tool not detected\n" unless $valid->{status} eq 'ok' && $valid->{tool_ok};
     my $invalid = classify({choices=>[{finish_reason=>'stop',message=>{reasoning_content=>'I will call a tool.',content=>'No call.'}}]},'c4-on','tool-1');
     die "tool missing not detected\n" unless $invalid->{status} eq 'tool_failure';
+    my $unfinished = classify({choices=>[{finish_reason=>'stop',message=>{reasoning_content=>'Still thinking.',content=>''}}]},'c1-on','image-1');
+    die "thinking without final answer not detected\n" unless $unfinished->{status} eq 'no_final_answer';
     my $nonascii = classify({choices=>[{finish_reason=>'length',message=>{reasoning_content=>('노란색 바탕에서 눈과 입의 모양만 다시 검토합니다. ' x 30),content=>''}}]},'c1-on','image-1');
     die "unicode repetition not detected\n" unless $nonascii->{status} eq 'repetition';
-    print "repetition-analyzer: 6 self-tests PASS\n";
+    print "repetition-analyzer: 7 self-tests PASS\n";
     exit 0;
 }
 @ARGV == 3 or die "Usage: $0 RESPONSE.json MODE CASE | --self-test\n";

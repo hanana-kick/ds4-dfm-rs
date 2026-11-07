@@ -17,7 +17,7 @@ fn serving_docs_match_runtime() {
 fn v41_checkpoint_is_qualified() {
     let rendered = serving_docs::render();
     assert!(rendered.contains(
-        "| DeepSeek V4.1 Flash | serial / none | exact / qualified | qualified | none |"
+        "| DeepSeek V4.1 Flash | ephemeral / unverified | exact / qualified | qualified | none |"
     ));
     assert!(rendered.contains("--prefix-reuse off|exact|auto"));
     assert!(!rendered.contains("serving layer keeps no reuse plan"));

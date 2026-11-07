@@ -2041,3 +2041,5 @@ int ds4_bridge_continuous_generate(
                                           on_token ? cont_tramp_on_token : NULL,
                                           cont_tramp_on_done, &t, err, errlen);
 }
+
+#include "ds4_bridge_v41_batch.inc"

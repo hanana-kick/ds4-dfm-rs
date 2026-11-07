@@ -2786,3 +2786,15 @@ DEPFILES := $(addsuffix .d,$(BUILD_OBJECTS))
 
 clean:
 	rm -f $(BUILD_OBJECTS) $(BUILD_PROGRAMS) $(DEPFILES)
+
+# Ephemeral V4.1 concurrent requests: model-free bridge lifetime/dispatch only.
+# GPU arithmetic and C1/C4+vision require tests/ds41_concurrent_http_gate.sh.
+.PHONY: test-ds41-batch-lifetime
+tests/test_ds41_batch_lifetime: tests/test_ds41_batch_lifetime.c native/bridge/ds4_bridge.c native/bridge/ds4_bridge.h native/bridge/ds4_bridge_v41_batch.inc ds41_batch.h
+	$(CC) $(CFLAGS) -ffunction-sections -fdata-sections -I. -o $@ $< -Wl,--gc-sections
+
+test-ds41-batch-lifetime: tests/test_ds41_batch_lifetime
+	./tests/test_ds41_batch_lifetime
+	bash -n tests/ds41_concurrent_http_gate.sh
+
+gate-ds41: test-ds41-batch-lifetime

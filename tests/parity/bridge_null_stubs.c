@@ -747,3 +747,19 @@ int ds4_v41_zchain_rb_set(void *engine, uint32_t il, const float *delta, uint32_
     return 0;
 }
 void ds4_v41_zchain_rb_clear(void) {}
+
+/* Ephemeral V4.1 request/batch ABI: null oracle refuses GPU work. */
+#include "ds41_batch.h"
+struct ds4_v41_request *ds4_v41_request_open(void *e,const int32_t *p,int np,int n,int no,
+        struct ds4_v41_images *i,const ds41_engram_feed *f) {
+    (void)e;(void)p;(void)np;(void)n;(void)no;(void)i;(void)f;return NULL;
+}
+void ds4_v41_request_close(struct ds4_v41_request *r) { (void)r; }
+int ds4_v41_request_prefill(struct ds4_v41_request *r,float *l,size_t n) { (void)r;(void)l;(void)n;return -1; }
+uint32_t ds4_v41_request_position(const struct ds4_v41_request *r) { (void)r;return 0; }
+uint64_t ds4_v41_request_peak(void *e,int p,int n,int no) { (void)e;(void)p;(void)n;(void)no;return UINT64_MAX; }
+struct ds4_v41_batch *ds4_v41_batch_open(void *e,int n) { (void)e;(void)n;return NULL; }
+void ds4_v41_batch_close(struct ds4_v41_batch *b) { (void)b; }
+int ds4_v41_batch_step(struct ds4_v41_batch *b,struct ds4_v41_request **r,const int32_t *t,int n,float *l,size_t f) {
+    (void)b;(void)r;(void)t;(void)n;(void)l;(void)f;return 1;
+}

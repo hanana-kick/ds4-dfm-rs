@@ -230,7 +230,12 @@ impl ContStepper {
     }
 
     #[cfg(any(feature = "native", test))]
-    fn admitted_head(&mut self, head: Vec<u8>, n_cached: i32, n_computed: i32) -> Vec<u8> {
+    pub(crate) fn admitted_head(
+        &mut self,
+        head: Vec<u8>,
+        n_cached: i32,
+        n_computed: i32,
+    ) -> Vec<u8> {
         self.apply_engine_usage(n_cached, n_computed);
         if !self.req.stream || self.req.api != Api::Anthropic {
             return head;
@@ -250,6 +255,16 @@ impl ContStepper {
             required_tool_prefix: &self.required_tool_prefix,
         };
         self.acc.sampling_override(&policy)
+    }
+
+    /// V4.1 preserves the source engine's greedy DSML syntax positions;
+    /// reasoning and argument string bodies retain the request's sampler.
+    #[cfg(any(feature = "native", test))]
+    pub(crate) fn v41_syntax_greedy(&self) -> bool {
+        self.model_id == ds4_core::Variant::DeepSeek41Flash as i32
+            && self.req.kind == ReqKind::Chat
+            && self.acc.track_tools
+            && self.acc.syntax_greedy(&[])
     }
 
     pub fn sample_exclude(&self, eos: i32) -> i32 {
@@ -340,7 +355,7 @@ impl ContStepper {
     }
 
     #[cfg(any(feature = "native", test))]
-    fn heartbeat(&mut self, now: Instant) -> Vec<u8> {
+    pub(crate) fn heartbeat(&mut self, now: Instant) -> Vec<u8> {
         stream_heartbeat_if_due(
             &mut self.w,
             &self.req,
@@ -353,7 +368,7 @@ impl ContStepper {
     }
 
     #[cfg(feature = "native")]
-    fn fail(&mut self, message: &str) -> Vec<u8> {
+    pub(crate) fn fail(&mut self, message: &str) -> Vec<u8> {
         if self.req.stream {
             stream_error(&mut self.w, &self.req, self.resp.as_mut(), message);
         }
@@ -603,7 +618,7 @@ impl ContStepper {
     }
 
     #[cfg(any(feature = "native", test))]
-    fn take_tool_replay(&mut self) -> Option<(Vec<ToolCall>, String)> {
+    pub(crate) fn take_tool_replay(&mut self) -> Option<(Vec<ToolCall>, String)> {
         self.tool_replay.take()
     }
 

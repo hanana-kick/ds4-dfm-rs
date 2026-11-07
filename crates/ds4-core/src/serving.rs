@@ -128,6 +128,8 @@ pub enum Support {
 pub enum BankLane {
     Serial,
     OptIn,
+    /// Opt-in active request states; no persistent warm/fork/snapshot banks.
+    Ephemeral,
     Persistent,
 }
 
@@ -687,8 +689,8 @@ pub fn serving_caps(family: ModelFamily, variant: Variant) -> ServingCaps {
         return ServingCaps {
             family,
             variant,
-            banks: BankLane::Serial,
-            bank_support: Support::None,
+            banks: BankLane::Ephemeral,
+            bank_support: Support::Present,
             reuse: ReuseKind::Exact,
             reuse_support: Support::Qualified,
             disk: Support::Qualified,
@@ -1347,6 +1349,39 @@ pub fn resolve_plan(
     );
     let driver = bank_driver(req, caps, max_seqs, facts);
     let reuse = resolve_reuse(req, caps, driver, facts, &mut issues);
+    if caps.variant == Variant::DeepSeek41Flash && max_seqs > 1 {
+        if max_seqs > crate::V41_BATCH_MAX as u32 {
+            issues.push(error(
+                "v41_batch_width",
+                "V4.1 packed decode supports at most 8 active requests",
+            ));
+        }
+        if req.lane == LaneMode::Serial {
+            issues.push(error(
+                "v41_batch_lane",
+                "V4.1 multiple requests require the continuous lane",
+            ));
+        }
+        if req.mtp_mode != MtpMode::Off {
+            issues.push(error(
+                "v41_batch_mtp",
+                "V4.1 concurrent decoding requires explicit --mtp-mode off",
+            ));
+        }
+        if req.prefix_reuse != PrefixReuse::Off {
+            issues.push(error(
+                "v41_batch_reuse",
+                "V4.1 concurrent decoding requires explicit --prefix-reuse off",
+            ));
+        }
+        if req.kv_disk_dir.is_some() {
+            issues.push(error(
+                "v41_batch_disk",
+                "V4.1 concurrent requests have no disk checkpoint; remove --kv-disk-dir",
+            ));
+        }
+        issues.push(warn("v41_batch_unqualified", "experimental V4.1 packed lane: plain eager decode, request-local images/Engram, no MTP/reuse/snapshots; GPU qualification pending"));
+    }
     let (mtp_mode, mtp_weights) = resolve_mtp(req, caps, facts, driver, &mut issues);
     // A draft below the family minimum allocates no speculative runtime, so
     // the plan would claim a feature that runs ordinary decode.
@@ -1730,7 +1765,8 @@ impl ResolvedPlan {
         // The legacy switch and the width are orthogonal: `--max-seqs N`
         // sizes the banks the static lane coalesces over, it does not ask
         // for continuous routing the switch turned off.
-        if self.uses_serial_mtp()
+        if (self.variant == Some(Variant::DeepSeek41Flash) && self.effective.max_seqs == 1)
+            || self.uses_serial_mtp()
             || self.requested.lane == LaneMode::Serial
             || self.requested.backend != Backend::Cuda
             || self.requested.max_seqs == MaxSeqs::Off
@@ -1926,6 +1962,7 @@ impl ResolvedPlan {
             "banks": self.caps.map(|caps| match caps.banks {
                 BankLane::Serial => "serial",
                 BankLane::OptIn => "opt_in",
+                BankLane::Ephemeral => "ephemeral",
                 BankLane::Persistent => "persistent",
             }),
             "mtp": self.caps.map(|caps| caps.mtp_support.as_str()),
@@ -2354,7 +2391,7 @@ fn apply_quote(
                 ));
             }
             *max_seqs = n;
-            *banks_opt_in = n > 1 && caps.banks == BankLane::OptIn;
+            *banks_opt_in = n > 1 && matches!(caps.banks, BankLane::OptIn | BankLane::Ephemeral);
         }
         None => {
             issues.push(error(
@@ -2430,7 +2467,7 @@ fn resolve_seqs(
     let mut want = match requested {
         MaxSeqs::Off => 1,
         MaxSeqs::Auto => match caps.banks {
-            BankLane::Serial | BankLane::OptIn => 1,
+            BankLane::Serial | BankLane::OptIn | BankLane::Ephemeral => 1,
             BankLane::Persistent => caps.qualified_banks.unwrap_or(DEFAULT_MAX_SEQS),
         },
         MaxSeqs::Fixed(n) => n,
@@ -2489,7 +2526,7 @@ fn resolve_seqs(
             ));
         }
     }
-    let opt_in = n > 1 && caps.banks == BankLane::OptIn;
+    let opt_in = n > 1 && matches!(caps.banks, BankLane::OptIn | BankLane::Ephemeral);
     (n, opt_in)
 }
 
@@ -2659,7 +2696,9 @@ fn bank_driver(
         || req.backend != Backend::Cuda
         || facts.cont_lane == Some(false)
         || caps.banks == BankLane::Serial
-        || (caps.banks == BankLane::OptIn && width < 2 && !single_naive);
+        || (matches!(caps.banks, BankLane::OptIn | BankLane::Ephemeral)
+            && width < 2
+            && !single_naive);
     if absent {
         BankDriver::Absent
     } else {
@@ -2771,7 +2810,7 @@ fn measured_limits(
 fn qualified_note(caps: ServingCaps) -> &'static str {
     match caps.variant {
         Variant::DeepSeek41Flash => {
-            "recorded Spark gates cover greedy single-request embedded speculation with decode graphs (56-token and 1,100-token byte-identical runs and matching engine traces); the sampling profile is not qualified; the artifact fixes the draft block and verification width is scheduled per round (--mtp-draft is unsupported; --dspark-verify pins verification); native prompt-end exact prefix reuse and its KVC disk checkpoint are qualified; --prefix-reuse off|exact|auto controls live and disk reuse (--no-kv-reuse aliases off); partial reuse, banks and session snapshots are unavailable; context comes from model metadata, --ctx is rejected"
+            "recorded Spark gates cover greedy single-request embedded speculation with decode graphs (56-token and 1,100-token byte-identical runs and matching engine traces); the sampling profile is not qualified; the artifact fixes the draft block and verification width is scheduled per round (--mtp-draft is unsupported; --dspark-verify pins verification); native prompt-end exact prefix reuse and its KVC disk checkpoint are qualified; --prefix-reuse off|exact|auto controls live and disk reuse (--no-kv-reuse aliases off); partial reuse and persistent banks/snapshots are unavailable; opt-in 2..8 ephemeral requests require --mtp-mode off --prefix-reuse off and have no GPU qualification yet (tests/ds41_concurrent_http_gate.sh); context comes from model metadata, --ctx is rejected"
         }
         Variant::NaiveN05Flash => {
             "main-only chunk-2048 buffered retrieval and disk continuation: 256K/two banks, 512K/one bank; draft-loaded and other shapes retain the bounded 8K gate; DSpark acceleration unqualified"
@@ -4207,7 +4246,8 @@ mod tests {
             ModelFamily::DeepSeek4,
             Variant::DeepSeek41Flash,
         );
-        assert!(p.issues.iter().any(|i| i.code == "banks_unsupported"));
+        assert!(p.issues.iter().any(|i| i.code == "v41_batch_mtp"));
+        assert!(p.issues.iter().any(|i| i.code == "v41_batch_reuse"));
         let p = plan(
             ServingRequest {
                 prefix_reuse: PrefixReuse::Partial,
@@ -4220,8 +4260,8 @@ mod tests {
 
         // The caps row itself, requested/effective/qualified in one place.
         let caps = serving_caps(ModelFamily::DeepSeek4, Variant::DeepSeek41Flash);
-        assert_eq!(caps.banks, BankLane::Serial);
-        assert_eq!(caps.bank_support, Support::None);
+        assert_eq!(caps.banks, BankLane::Ephemeral);
+        assert_eq!(caps.bank_support, Support::Present);
         assert_eq!(caps.reuse, ReuseKind::Exact);
         assert_eq!(caps.reuse_support, Support::Qualified);
         assert_eq!(caps.disk, Support::Qualified);
@@ -4246,6 +4286,49 @@ mod tests {
         assert!(!p.has_errors(), "{:?}", p.issues);
         assert!(p.effective.disk);
         assert_eq!(p.qualified.disk, Support::Qualified);
+    }
+
+    #[test]
+    fn v41_packed_requests_require_explicit_bounded_plain_lane() {
+        for width in [2, 4, 8] {
+            let p = plan(
+                ServingRequest {
+                    max_seqs: MaxSeqs::Fixed(width),
+                    mtp_mode: MtpMode::Off,
+                    prefix_reuse: PrefixReuse::Off,
+                    ..ServingRequest::default()
+                },
+                ModelFamily::DeepSeek4,
+                Variant::DeepSeek41Flash,
+            );
+            assert!(!p.has_errors(), "{width}: {:?}", p.issues);
+            assert_eq!(p.effective.max_seqs, width);
+            assert_eq!(p.qualified.banks, Support::Present);
+            assert_eq!(p.qualified.banks_n, Some(1));
+            assert!(!p.effective.disk);
+            assert!(p.issues.iter().any(|i| i.code == "v41_batch_unqualified"));
+        }
+        for (mut req, code) in [
+            (ServingRequest::default(), "v41_batch_width"),
+            (ServingRequest::default(), "v41_batch_disk"),
+            (ServingRequest::default(), "v41_batch_lane"),
+        ] {
+            req.max_seqs = MaxSeqs::Fixed(if code == "v41_batch_width" { 9 } else { 4 });
+            req.mtp_mode = MtpMode::Off;
+            req.prefix_reuse = PrefixReuse::Off;
+            if code == "v41_batch_disk" {
+                req.kv_disk_dir = Some("/tmp/kv".into());
+            }
+            if code == "v41_batch_lane" {
+                req.lane = LaneMode::Serial;
+            }
+            let p = plan(req, ModelFamily::DeepSeek4, Variant::DeepSeek41Flash);
+            assert!(
+                p.issues.iter().any(|i| i.code == code),
+                "{code}: {:?}",
+                p.issues
+            );
+        }
     }
 
     #[test]

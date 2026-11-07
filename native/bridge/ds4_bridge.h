@@ -412,6 +412,25 @@ int ds4_bridge_v41_generate(ds4_bridge_model *m,
                             ds4_bridge_v41_emit_fn emit, void *emit_ud,
                             ds4_bridge_v41_progress_fn progress, void *progress_ud,
                             char *err, size_t errlen);
+/* V4.1 packed plain-decode lane. Opaque requests retain their provider and
+ * preprocessed image patches until close. All entry points run on one owner
+ * thread; no concurrent host calls, checkpoints, or per-request global setters. */
+typedef struct ds4_bridge_v41_request ds4_bridge_v41_request;
+typedef struct ds4_bridge_v41_batch ds4_bridge_v41_batch;
+uint64_t ds4_bridge_v41_request_peak(ds4_bridge_model *m, int np, int predict, int no_engram);
+ds4_bridge_v41_request *ds4_bridge_v41_request_open(ds4_bridge_model *m,
+    const int32_t *prompt, int np, int predict, int no_engram,
+    const ds4_bridge_v41_images *images, ds4_bridge_v41_rows_fn rows,
+    ds4_bridge_v41_wait_fn wait, ds4_bridge_v41_next_fn next,
+    ds4_bridge_v41_drain_fn drain, void *provider, char *err, size_t errlen);
+void ds4_bridge_v41_request_close(ds4_bridge_v41_request *r);
+int ds4_bridge_v41_request_prefill(ds4_bridge_v41_request *r, float *logits, size_t count, char *err, size_t errlen);
+uint32_t ds4_bridge_v41_request_position(const ds4_bridge_v41_request *r);
+ds4_bridge_v41_batch *ds4_bridge_v41_batch_open(ds4_bridge_model *m, int width, char *err, size_t errlen);
+void ds4_bridge_v41_batch_close(ds4_bridge_v41_batch *b);
+int ds4_bridge_v41_batch_step(ds4_bridge_v41_batch *b, ds4_bridge_v41_request *const *requests,
+    const int32_t *tokens, int count, float *logits, size_t floats, char *err, size_t errlen);
+
 int ds4_bridge_session_eval_layer_slice(ds4_bridge_session *s,
                                         const int32_t *tokens,
                                         uint32_t n_tokens,

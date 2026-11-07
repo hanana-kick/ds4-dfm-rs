@@ -2249,6 +2249,10 @@ fn settle_generation_result<W: TerminalSink>(
             write_generation_error(cfg, job, out, 503, msg, None);
             Settlement::FAILED
         }
+        Err(GenerateError::Capacity(msg)) => {
+            write_generation_error(cfg, job, out, 503, msg, Some(1));
+            Settlement::FAILED
+        }
         Err(GenerateError::ContinuationHold { retry_after }) => {
             write_generation_error(
                 cfg,

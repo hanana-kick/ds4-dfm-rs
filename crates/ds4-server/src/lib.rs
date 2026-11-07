@@ -38,6 +38,8 @@ mod serve_serial_reclaim;
 #[cfg(test)]
 mod serve_serial_reclaim_test;
 pub mod serve_static;
+#[cfg(feature = "native")]
+pub mod serve_v41;
 pub mod stream;
 #[cfg(any(feature = "native", test))]
 mod tool_memory;

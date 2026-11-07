@@ -1429,3 +1429,62 @@ mod socket_tests {
         drop(client);
     }
 }
+
+// Source-matched V4.1 packed request ABI. CUDA state remains opaque.
+#[repr(C)]
+pub struct ds4_bridge_v41_request {
+    _opaque: [u8; 0],
+}
+#[repr(C)]
+pub struct ds4_bridge_v41_batch {
+    _opaque: [u8; 0],
+}
+unsafe extern "C" {
+    pub fn ds4_bridge_v41_request_peak(
+        m: *mut ds4_bridge_model,
+        np: c_int,
+        predict: c_int,
+        no_engram: c_int,
+    ) -> u64;
+    pub fn ds4_bridge_v41_request_open(
+        m: *mut ds4_bridge_model,
+        prompt: *const i32,
+        np: c_int,
+        predict: c_int,
+        no_engram: c_int,
+        images: *const ds4_bridge_v41_images,
+        rows: ds4_bridge_v41_rows_fn,
+        wait: ds4_bridge_v41_wait_fn,
+        next: ds4_bridge_v41_next_fn,
+        drain: ds4_bridge_v41_drain_fn,
+        provider: *mut c_void,
+        err: *mut c_char,
+        errlen: usize,
+    ) -> *mut ds4_bridge_v41_request;
+    pub fn ds4_bridge_v41_request_close(r: *mut ds4_bridge_v41_request);
+    pub fn ds4_bridge_v41_request_prefill(
+        r: *mut ds4_bridge_v41_request,
+        logits: *mut f32,
+        count: usize,
+        err: *mut c_char,
+        errlen: usize,
+    ) -> c_int;
+    pub fn ds4_bridge_v41_request_position(r: *const ds4_bridge_v41_request) -> u32;
+    pub fn ds4_bridge_v41_batch_open(
+        m: *mut ds4_bridge_model,
+        width: c_int,
+        err: *mut c_char,
+        errlen: usize,
+    ) -> *mut ds4_bridge_v41_batch;
+    pub fn ds4_bridge_v41_batch_close(b: *mut ds4_bridge_v41_batch);
+    pub fn ds4_bridge_v41_batch_step(
+        b: *mut ds4_bridge_v41_batch,
+        requests: *const *mut ds4_bridge_v41_request,
+        tokens: *const i32,
+        count: c_int,
+        logits: *mut f32,
+        floats: usize,
+        err: *mut c_char,
+        errlen: usize,
+    ) -> c_int;
+}

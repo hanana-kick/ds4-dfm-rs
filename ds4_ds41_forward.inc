@@ -1299,8 +1299,11 @@ static bool v41_forward(ds4_engine *e, ds4_v41_state *st, const int32_t *ids, ui
     if (ds4_gpu_begin_commands() == 0) return false;
     const bool body_ok = v41_forward_body(e, st);
     st->vrows_on = 0;   /* image rows belong to this block only */
-    if (!body_ok) return false;
-    if (ds4_gpu_end_commands() == 0 || ds4_gpu_synchronize() == 0) return false;
+    /* A failed kernel must not leave the shared command scope open before
+     * another request runs or the failing request frees borrowed buffers. */
+    const bool end_ok = ds4_gpu_end_commands() != 0;
+    const bool sync_ok = ds4_gpu_synchronize() != 0;
+    if (!body_ok || !end_ok || !sync_ok) return false;
     /* The main-hidden ring's accounting (core_v41_forward.c:391-400): continue
      * the run when this block touches the previous one, restart it otherwise
      * (a CED block writes no ring rows).  Only the contiguous run ending at

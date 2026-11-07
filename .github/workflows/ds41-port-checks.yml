@@ -24,19 +24,57 @@ jobs:
   source-record:
     if: github.repository == 'hanana-kick/ds4-dfm-rs'
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: Record exact source
         run: |
-          git rev-parse HEAD > source-commit.txt
-          git archive --format=tar.gz --output=ds41-source.tar.gz HEAD
-          sha256sum ds41-source.tar.gz > ds41-source.sha256
+          mkdir -p record
+          git rev-parse HEAD > record/source-commit.txt
+          git archive --format=tar.gz --output=record/ds41-source.tar.gz HEAD
+      - uses: actions/checkout@v4
+        with:
+          repository: Entrpi/ds4
+          ref: addc0c4bd6c664f8eed556df5c41f17990dcfcb6
+          path: reference-entrpi
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: fodelf/YoungAi
+          ref: 7fb26cc332d740416792204a29c7d13d2986caf5
+          path: reference-youngai
+          persist-credentials: false
+      - name: Record donor revisions
+        run: |
+          git -C reference-entrpi archive --format=tar.gz --output="$PWD/record/entrpi-v0.6.5.tar.gz" HEAD
+          git -C reference-youngai archive --format=tar.gz --output="$PWD/record/youngai-reference.tar.gz" HEAD
+          sha256sum record/*.tar.gz > record/SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
-          name: ds41-port-source
-          path: |
-            source-commit.txt
-            ds41-source.tar.gz
-            ds41-source.sha256
+          name: ds41-port-sources
+          path: record/
           retention-days: 7
+  host-inputs:
+    if: github.repository == 'hanana-kick/ds4-dfm-rs'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
+      - name: Fetch locked host dependencies
+        run: cargo fetch --locked
+      - name: Archive offline host inputs (no credentials)
+        run: |
+          mkdir -p host-inputs
+          rustc --version > host-inputs/rust-version.txt
+          cargo --version >> host-inputs/rust-version.txt
+          toolchain=$(dirname "$(dirname "$(rustup which rustc)")")
+          tar -czf host-inputs/rust-toolchain.tar.gz -C "$toolchain" .
+          tar -czf host-inputs/cargo-registry.tar.gz -C "$HOME/.cargo" registry git
+          sha256sum host-inputs/*.tar.gz > host-inputs/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ds41-host-inputs
+          path: host-inputs/
+          retention-days: 2

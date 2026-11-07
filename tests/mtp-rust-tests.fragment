@@ -1,0 +1,74 @@
+
+/// Stop before consuming RNG for any row whose history was not accepted.
+fn continue_after(ids: &[i32], row: usize, emitted: Option<i32>, done: bool) -> bool {
+    !done && emitted.is_some()
+        && row.checked_add(1).and_then(|next| ids.get(next)).copied() == emitted
+}
+impl V41Request<'_> {
+    pub fn verify_continue(&self, row: usize, emitted: Option<i32>, done: bool) -> bool {
+        continue_after(&self.verify_ids, row, emitted, done)
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn verification_stops_before_any_unaccepted_history_or_extra_draw() {
+        let ids = [0, 1, 2, 3, 4, 5];
+        assert!(continue_after(&ids, 0, Some(1), false));
+        assert!(continue_after(&ids, 4, Some(5), false));
+        assert!(!continue_after(&ids, 0, Some(2), false));
+        assert!(!continue_after(&ids, 0, Some(1), true));
+        assert!(!continue_after(&ids, 5, None, false));
+        assert!(!continue_after(&ids, usize::MAX, None, false));
+        assert!(!continue_after(&[], 0, Some(0), false));
+    }
+    fn logits(last: i32) -> Vec<f32> {
+        (0..6).map(|t| if t == (last + 1) % 6 { 2.5 } else { (t as f32 - 3.) * 0.2 }).collect()
+    }
+    fn target(last: i32, generated: &[i32], rng: &mut u64, temp: f32) -> i32 {
+        if generated.len() % 7 == 3 { return 2; }
+        let mut row = logits(last);
+        let face = V41Sampling { freq_penalty: 0.15, presence_penalty: 0.3,
+            dry_multiplier: 0.7, dry_base: 1.75, dry_allowed_length: 2,
+            ..V41Sampling::default() };
+        penalize(&mut row, generated, Some(&[false, false, false, false, false, true]), face);
+        let sampler = if generated.len() % 5 == 2 { Sampler::GREEDY }
+            else { Sampler { temperature: temp, top_p: 0.95, top_k: 4, min_p: 0.02 } };
+        let excluded = if generated.len() % 3 == 0 { 5 } else { -1 };
+        draw(&row, &sampler, rng, [excluded, -1])
+    }
+    fn generate(seed: u64, temp: f32, speculate: bool) -> (Vec<i32>, u64) {
+        let mut out = vec![0]; let mut rng = seed;
+        while out.len() < 67 {
+            let pending = *out.last().unwrap();
+            let mut candidates = vec![pending];
+            if speculate {
+                for _ in 0..5 { candidates.push((candidates.last().unwrap() + 1) % 6); }
+            }
+            for row in 0..candidates.len() {
+                let token = target(candidates[row], &out, &mut rng, temp);
+                assert!(token >= 0);
+                out.push(token);
+                if !continue_after(&candidates, row, Some(token), out.len() == 67) { break; }
+            }
+        }
+        (out, rng)
+    }
+    #[test]
+    fn target_sampling_rng_penalties_and_syntax_match_plain_decode() {
+        for temp in [0., 0.6, 1.0, 1.7] {
+            for seed in 1..=128 {
+                assert_eq!(generate(seed, temp, true), generate(seed, temp, false),
+                    "seed={seed} temperature={temp}");
+            }
+        }
+    }
+    #[test]
+    fn independently_seeded_speculation_does_not_change_when_reordered() {
+        let forward: Vec<_> = (1..=8).map(|seed| generate(seed, 0.8, true)).collect();
+        let mut backward: Vec<_> = (1..=8).rev().map(|seed| generate(seed, 0.8, true)).collect();
+        backward.reverse();
+        assert_eq!(forward, backward);
+    }
+}

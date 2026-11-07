@@ -2,7 +2,7 @@ name: DS41 packed MTP implementation checks
 on:
   push:
     branches: [work/ds41-packed-mtp-20261107]
-    paths: [tools/apply-ds41-mtp.mjs, '.github/workflows/ds41-mtp-work.yml']
+    paths: [tools/apply-ds41-mtp.mjs, tools/finish-ds41-mtp.mjs, '.github/workflows/ds41-mtp-work.yml']
 permissions:
   contents: write
 concurrency:
@@ -16,16 +16,19 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: work/ds41-packed-mtp-20261107
+          fetch-depth: 0
       - name: Apply source changes
-        run: node tools/apply-ds41-mtp.mjs
-      - name: Native syntax and layout checks
+        run: |
+          node tools/apply-ds41-mtp.mjs
+          node tools/finish-ds41-mtp.mjs
+      - name: Native syntax and transaction checks
         run: |
           cc -fsyntax-only -std=c99 -D_GNU_SOURCE ds4.c
           cc -fsyntax-only -std=c99 -D_GNU_SOURCE -DDS4_NO_GPU ds4.c
           cc -fsyntax-only -std=c99 -D_GNU_SOURCE -I. native/bridge/ds4_bridge.c
-          make test-ds41-bridge-lifetime test-ds41-batch-lifetime test-ds41-spec-plan
-          cc -O1 -g -std=c11 -D_GNU_SOURCE -fsanitize=address,undefined -ffunction-sections -fdata-sections -I. tests/test_ds41_batch_lifetime.c -Wl,--gc-sections -o /tmp/ds41-batch-lifetime
-          /tmp/ds41-batch-lifetime
+          make test-ds41-bridge-lifetime test-ds41-batch-lifetime test-ds41-spec-plan test-ds41-mtp-bridge
+          cc -O1 -g -std=c11 -D_GNU_SOURCE -fsanitize=address,undefined -ffunction-sections -fdata-sections -I. tests/test_ds41_mtp_bridge.c -Wl,--gc-sections -o /tmp/ds41-mtp-bridge-san
+          /tmp/ds41-mtp-bridge-san
           cc -O1 -g -std=c11 -fsanitize=address,undefined tests/test_ds41_spec_plan.c -o /tmp/ds41-spec-plan-san
           /tmp/ds41-spec-plan-san
       - name: Host build dependencies
@@ -41,12 +44,22 @@ jobs:
           cargo fmt --all
           cargo check --locked -p ds4-server --features native
           cargo run --locked -q -p ds4-core --example serving_docs > docs/serving-capabilities.md
+      - name: Rust lint
+        run: make ci-lint
       - name: Rust regression checks
         run: make ci-rust
       - name: C and Rust parity
         run: make ci-parity
       - name: Model-free regression checks
         run: make ci-model-free
+      - name: Save generated source patch
+        if: always()
+        run: git diff --binary > /tmp/ds41-mtp-generated.patch
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ds41-mtp-source-patch
+          path: /tmp/ds41-mtp-generated.patch
       - name: Commit checked implementation
         run: |
           git config user.name "github-actions[bot]"

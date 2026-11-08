@@ -82068,3 +82068,6 @@ int ds4_test_v41_sample_pick(const int32_t *slot, const int32_t *batch,
 }
 #endif /* DS4_TEST_HOOKS */
 #endif /* DS4_NO_GPU */
+
+/* Request-local V4.1 state and shared packed-decode workspace. */
+#include "ds4_ds41_batch.inc"

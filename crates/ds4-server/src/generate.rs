@@ -56,6 +56,8 @@ pub enum GenerateError {
     /// before any work, never by silently dropping part of the input.
     BadRequest(&'static str),
     Unsupported(&'static str),
+    /// Temporary capacity refusal, not a serial fallback request.
+    Capacity(&'static str),
     ContinuationHold {
         retry_after: i32,
     },
@@ -69,6 +71,7 @@ impl std::fmt::Display for GenerateError {
         match self {
             GenerateError::BadRequest(s) => f.write_str(s),
             GenerateError::Unsupported(s) => f.write_str(s),
+            GenerateError::Capacity(s) => f.write_str(s),
             GenerateError::ContinuationHold { .. } => {
                 f.write_str("batch capacity is reserved for live tool continuations")
             }

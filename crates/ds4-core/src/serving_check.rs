@@ -114,6 +114,11 @@ impl Item {
 
     /// The support the caps state for this item; `None` when they do not.
     fn declared(self, caps: &ServingCaps) -> Support {
+        // These items exercise persistent bank admit/fork/restore, not the
+        // separate packed active-request driver. Its GPU gate is listed below.
+        if caps.banks == crate::serving::BankLane::Ephemeral && Self::BANK.contains(&self) {
+            return Support::None;
+        }
         let reuse = if caps.reuse == ReuseKind::None {
             Support::None
         } else {
@@ -237,7 +242,14 @@ fn limit(v: Option<u32>) -> String {
 
 /// Categories the checklist lists but cannot run yet, with their declaration.
 fn unchecked(c: &ServingCaps, mtp_bound: bool) -> Vec<(&'static str, &'static str, String)> {
-    let mut rows = Vec::with_capacity(4);
+    let mut rows = Vec::with_capacity(5);
+    if c.banks == crate::serving::BankLane::Ephemeral {
+        rows.push((
+            "concurrency",
+            "packed",
+            "present, unqualified; run tests/ds41_concurrent_http_gate.sh on GPU".into(),
+        ));
+    }
     if !mtp_bound {
         rows.push((
             "mtp",
@@ -1130,7 +1142,10 @@ pub fn serving_check_v41(
     for item in Item::BANK {
         list.rows.push((
             item,
-            Measured::Refused("V4.1 serves one sequence: no banks".into()),
+            Measured::Refused(
+                "V4.1 has no persistent banks; packed requests require the separate GPU gate"
+                    .into(),
+            ),
         ));
     }
     Ok(list)

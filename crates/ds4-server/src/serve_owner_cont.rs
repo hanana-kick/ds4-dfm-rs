@@ -113,11 +113,15 @@ struct OwnerRollSource<'a> {
     served: usize,
     draining: bool,
     created: i64,
+    source_received: usize,
+    source_empty: usize,
+    source_gated: usize,
 }
 
 impl ContSource for OwnerRollSource<'_> {
     fn next(&mut self, probe: &dyn ContProbe) -> Option<ContOwnedWork> {
         if self.draining || self.lookahead.is_some() {
+            self.source_gated += 1;
             return None;
         }
         loop {
@@ -129,7 +133,10 @@ impl ContSource for OwnerRollSource<'_> {
                 Some(job) => job,
                 None => match self.jobs_rx.try_recv() {
                     Ok(job) => job,
-                    Err(TryRecvError::Empty | TryRecvError::Disconnected) => return None,
+                    Err(TryRecvError::Empty | TryRecvError::Disconnected) => {
+                        self.source_empty += 1;
+                        return None;
+                    }
                 },
             };
             if !primed
@@ -167,9 +174,11 @@ impl ContSource for OwnerRollSource<'_> {
                     })
                 {
                     self.lookahead = Some(job);
+                    self.source_gated += 1;
                     return None;
                 }
             }
+            self.source_received += 1;
             job.lease.start();
             let id = next_job_id(&mut lock_inner(self.inner).admit, job.prepared.parsed.kind);
             let key = self.next_key;
@@ -242,6 +251,9 @@ fn try_serve_rolling(
         served: 0,
         draining: false,
         created: unix_now(),
+        source_received: 0,
+        source_empty: 0,
+        source_gated: 0,
     };
     let mut bank_hold_retry = |bank, live| {
         lock_inner(inner)
@@ -267,7 +279,10 @@ fn try_serve_rolling(
         .values()
         .filter(|result| matches!(result, Err(GenerateError::Unsupported(_))))
         .count();
-    eprintln!("ds4-server-rs: continuous rolling path=cont served={served} fallback={fallback}");
+    eprintln!(
+        "ds4-server-rs: continuous rolling path=cont served={served} fallback={fallback} received={} queue_empty_polls={} route_gated_polls={}",
+        source.source_received, source.source_empty, source.source_gated
+    );
     for (key, (id, job)) in source.jobs {
         let result = by_key.remove(&key).unwrap_or_else(|| {
             Err(GenerateError::Engine(

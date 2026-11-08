@@ -23,7 +23,7 @@ The request's effective and qualified plan remains authoritative.
 |---|---|---|---|---|---|
 | DeepSeek V4 Flash | persistent / qualified | exact / qualified | qualified | qualified | DeepSeek / bank / qualified |
 | DeepSeek V4 Pro | persistent / qualified | exact / qualified | qualified | qualified | DeepSeek / bank / qualified |
-| DeepSeek V4.1 Flash | serial / none | exact / qualified | qualified | none | Embedded / serial / qualified |
+| DeepSeek V4.1 Flash | ephemeral / unverified | exact / qualified | qualified | none | Embedded / serial + bank / qualified |
 | Solar Open2 250B | persistent / qualified | partial / qualified | qualified | qualified | None / none / none |
 | Motif-3 | persistent / qualified | partial / qualified | qualified | qualified | None / none / none |
 | K-EXAONE 236B A23B | persistent / qualified | partial / qualified | qualified | qualified | None / none / none |
@@ -83,7 +83,7 @@ candidate. These are scheduler controls, not measurements or speed claims.
 
 ## Qualification notes
 
-- **DeepSeek V4.1 Flash:** recorded Spark gates cover greedy single-request embedded speculation with decode graphs (56-token and 1,100-token byte-identical runs and matching engine traces); the sampling profile is not qualified; the artifact fixes the draft block and verification width is scheduled per round (--mtp-draft is unsupported; --dspark-verify pins verification); native prompt-end exact prefix reuse and its KVC disk checkpoint are qualified; --prefix-reuse off|exact|auto controls live and disk reuse (--no-kv-reuse aliases off); partial reuse, banks and session snapshots are unavailable; context comes from model metadata, --ctx is rejected.
+- **DeepSeek V4.1 Flash:** recorded Spark gates qualify the serial embedded-MTP path; concurrent 2..8 requests implement independent draft towers, packed target verification and per-request rollback with --mtp-mode on|auto|off; concurrent MTP is present, not GPU-qualified; --prefix-reuse off is required for concurrent requests, which have no persistent banks, snapshots or disk KV; the artifact fixes the draft block (--mtp-draft is unsupported; --dspark-verify selects a width); the serial --prefix-reuse off|exact|auto controls retain the qualified native prompt-end checkpoint and KVC disk restoration on exact/auto; context comes from model metadata, --ctx is rejected.
 - **K-EXAONE 236B A23B:** LLLG ring rewind and partial checkpoints qualified.
 - **dots3-note-prev:** serial MTP is present but unqualified.
 - **Qwen3.8-Flash-Next:** common UX baseline; configured values and verified combinations differ.

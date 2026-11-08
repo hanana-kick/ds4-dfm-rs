@@ -176,8 +176,8 @@ pub use v41::{
     V41Wire, V41WireError, MTP_MAX_EXPERTS, MTP_MAX_TOWERS, V41_MAX_COMPRESS_RATIO, V41_MAX_ENGRAM,
 };
 pub use v41_run::{
-    v41_kvreuse_last_reused, v41_last_spec_stats, V41Feed, V41KvClass, V41KvDisk, V41KvHit,
-    V41RunOptions, V41Sampling,
+    v41_kvreuse_last_reused, v41_last_spec_stats, V41Batch, V41Feed, V41KvClass, V41KvDisk,
+    V41KvHit, V41Request, V41RunOptions, V41Sampling, V41_BATCH_MAX,
 };
 pub use validate::{
     dump_validate, host_compress_ratios, validate_file, validate_gguf, validate_qwen_inventory,

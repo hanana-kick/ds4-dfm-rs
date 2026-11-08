@@ -731,7 +731,9 @@ fn main() {
     };
     let mut kv_store = if model.is_some() { kv_store } else { None };
 
-    let lane = if let Some(ref model) = model {
+    let lane: Option<Box<dyn ds4_server::serve_cont::ContExec + '_>> = if let Some(ref model) =
+        model
+    {
         // What only the open engine knows. The refit re-resolves so a
         // fitted-down width or a refused lane cannot stay silently claimed.
         let mut opened = EngineFacts {
@@ -745,7 +747,39 @@ fn main() {
         model
             .ssd_quote(&mut opened)
             .unwrap_or_else(|error| cli_error(&error.message));
-        if cont_width > 0 && backend == Backend::Cuda {
+        if cont_width > 1 && v41_route.is_some() && backend == Backend::Cuda {
+            // V4.1 owns ephemeral request states, not ds4_session banks. Never
+            // fall back to serial after claiming an explicit concurrent width.
+            let v41 = ds4_server::serve_v41::V41ContLane::new(
+                model,
+                v41_route.clone().expect("checked V4.1 route"),
+                cont_width as usize,
+                cfg.mem_floor_gb.saturating_mul(1 << 30),
+                tool_memory,
+            )
+            .unwrap_or_else(|e| cli_error(&format!("V4.1 packed lane: {e}")));
+            let fitted = resolve_plan(
+                &serve_req,
+                caps,
+                &EngineFacts {
+                    banks_fitted: Some(cont_width as u32),
+                    seq_cap: Some(cfg.ctx as u32),
+                    cont_lane: Some(true),
+                    partial_reuse: Some(false),
+                    ..opened
+                },
+            );
+            eprint!("{}", fitted.report());
+            if !fitted.may_listen() {
+                cli_error("V4.1 packed serving plan rejected");
+            }
+            fitted.apply_env();
+            cfg.adopt_plan(&fitted);
+            eprintln!("[v41-batch] lane width={} vision={} MTP={} reuse=off; request-local draft/verify/rollback",
+                cont_width, v41_route.as_ref().is_some_and(|r| r.vision.is_some()),
+                fitted.effective.mtp_mode.as_str());
+            Some(Box::new(v41))
+        } else if cont_width > 0 && v41_route.is_none() && backend == Backend::Cuda {
             match model.batch_ctx_fit(
                 cfg.ctx,
                 cont_width,
@@ -786,7 +820,7 @@ fn main() {
                     fitted.apply_env();
                     let fitted_reuse = fitted.effective.prefix_reuse;
                     cfg.adopt_plan(&fitted);
-                    Some(
+                    Some(Box::new(
                         ContLane::new(
                             batch,
                             model.vocab(),
@@ -798,7 +832,7 @@ fn main() {
                         .with_template(model.chat_template())
                         .with_prefix_reuse(fitted_reuse)
                         .with_tool_memory(tool_memory),
-                    )
+                    ))
                 }
                 Err(e) => {
                     eprintln!("ds4-server-rs: continuous lane unavailable ({e}); serial only");
@@ -1006,7 +1040,9 @@ fn main() {
             engine = engine.with_store(store);
         }
         match lane {
-            Some(mut lane) => accept_loop_with_engine_cont(listener, cfg, &mut engine, &mut lane),
+            Some(mut lane) => {
+                accept_loop_with_engine_cont(listener, cfg, &mut engine, lane.as_mut())
+            }
             None => accept_loop_with_engine(listener, cfg, &mut engine),
         }
     } else {

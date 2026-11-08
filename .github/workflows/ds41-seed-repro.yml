@@ -1,0 +1,31 @@
+name: DS41 seed reproduction checks
+on:
+  push:
+    branches: [feat/ds41-entrpi-concurrency]
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: ds41-seeds-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  offline-reproduction:
+    if: github.repository == 'hanana-kick/ds4-dfm-rs'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: System requirements
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y jq iproute2
+          node --version
+      - name: Bash and Perl checks
+        run: |
+          bash -n tests/ds41_seed_repro_gate.sh
+          bash -n tests/ds41_seed_repro_mock.sh
+          perl -c tests/ds41_seed_repro_report.pl
+          bash tests/ds41_seed_repro_gate.sh --self-test
+      - name: Mocked HTTP reproduction and reference replay
+        run: bash tests/ds41_seed_repro_mock.sh

@@ -219,6 +219,7 @@ fn settle_member(
         Err(GenerateError::Unsupported(msg)) => Err(GenerateError::Unsupported(*msg)),
         Err(GenerateError::Streamed(msg)) => Err(GenerateError::Streamed(msg.clone())),
         Err(GenerateError::Io) => Err(GenerateError::Io),
+        Err(GenerateError::Capacity(msg)) => Err(GenerateError::Capacity(*msg)),
         Err(GenerateError::ContinuationHold { retry_after }) => {
             Err(GenerateError::ContinuationHold {
                 retry_after: *retry_after,

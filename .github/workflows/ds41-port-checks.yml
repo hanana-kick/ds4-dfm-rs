@@ -1,0 +1,49 @@
+name: DS41 concurrency port checks
+on:
+  push:
+    branches: [feat/ds41-entrpi-concurrency]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ds41-port-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  host-validation:
+    if: github.repository == 'hanana-kick/ds4-dfm-rs'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust
+        run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
+      - name: Host test dependencies
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Format and native-feature type checking
+        run: |
+          cargo fmt --all -- --check
+          cargo check --locked -p ds4-server --features native
+      - name: Serialized workspace regression tests
+        run: make ci-rust
+      - name: Model-free native bridge and syntax checks
+        run: |
+          make test-ds41-bridge-lifetime test-ds41-batch-lifetime
+          cc -fsyntax-only -std=c99 -D_GNU_SOURCE ds4.c
+          cc -fsyntax-only -std=c99 -D_GNU_SOURCE -DDS4_NO_GPU ds4.c
+          cc -fsyntax-only -std=c99 -D_GNU_SOURCE -I. native/bridge/ds4_bridge.c
+          cc -O1 -g -std=c11 -D_GNU_SOURCE -fsanitize=address,undefined -ffunction-sections -fdata-sections -I. tests/test_ds41_batch_lifetime.c -Wl,--gc-sections -o /tmp/ds41-batch-lifetime
+          /tmp/ds41-batch-lifetime
+      - name: Repetition gate syntax and detector self-tests
+        run: |
+          bash -n tests/ds41_repetition_gate.sh
+          perl -x tests/ds41_repetition_gate.sh --self-test
+          perl -c tests/ds41_thinking_verdict.pl
+          perl tests/ds41_thinking_verdict.pl --self-test
+          bash -n tests/ds41_seed_repro_gate.sh
+          perl -c tests/ds41_seed_repro_report.pl
+          bash tests/ds41_seed_repro_gate.sh --self-test
+          bash tests/ds41_seed_repro_mock.sh
+      - name: Qualification boundary
+        run: echo 'Host checks only. No GPU, model, throughput, C4 logits or concurrent-vision qualification.'

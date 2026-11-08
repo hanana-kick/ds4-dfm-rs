@@ -2002,7 +2002,7 @@ fn quote_batch_alloc(req: &ServingRequest, caps: ServingCaps, facts: &EngineFact
             return false;
         }
         MaxSeqs::Auto => match caps.banks {
-            BankLane::Serial | BankLane::OptIn => 1,
+            BankLane::Serial | BankLane::OptIn | BankLane::Ephemeral => 1,
             BankLane::Persistent => caps.qualified_banks.unwrap_or(DEFAULT_MAX_SEQS),
         },
         MaxSeqs::Fixed(n) => n,
@@ -2019,7 +2019,7 @@ fn quote_batch_alloc(req: &ServingRequest, caps: ServingCaps, facts: &EngineFact
     }
 
     // Explicit Naive width one still allocates a partial-restore bank.
-    caps.banks != BankLane::OptIn
+    !matches!(caps.banks, BankLane::OptIn | BankLane::Ephemeral)
         || width >= 2
         || (caps.family == ModelFamily::NaiveN05 && req.max_seqs == MaxSeqs::Fixed(1) && width == 1)
 }

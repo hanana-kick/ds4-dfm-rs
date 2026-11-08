@@ -2786,3 +2786,24 @@ DEPFILES := $(addsuffix .d,$(BUILD_OBJECTS))
 
 clean:
 	rm -f $(BUILD_OBJECTS) $(BUILD_PROGRAMS) $(DEPFILES)
+
+# Ephemeral V4.1 concurrent requests: model-free bridge lifetime/dispatch only.
+# GPU arithmetic and C1/C4+vision require tests/ds41_concurrent_http_gate.sh.
+.PHONY: test-ds41-batch-lifetime
+tests/test_ds41_batch_lifetime: tests/test_ds41_batch_lifetime.c native/bridge/ds4_bridge.c native/bridge/ds4_bridge.h native/bridge/ds4_bridge_v41_batch.inc native/bridge/ds4_bridge_v41_mtp.inc ds41_batch.h ds41_round.h
+	$(CC) $(CFLAGS) -ffunction-sections -fdata-sections -I. -o $@ $< -Wl,--gc-sections
+
+test-ds41-batch-lifetime: tests/test_ds41_batch_lifetime
+	./tests/test_ds41_batch_lifetime
+	bash -n tests/ds41_concurrent_http_gate.sh
+
+# CUDA arithmetic is tested separately; this executes the production host
+# control path with checked tensor doubles and allocation-failure injection.
+.PHONY: test-ds41-mtp-control
+test-ds41-mtp-control:
+	@out=$$(mktemp); trap 'rm -f "$$out"' EXIT; \
+	  $(CC) -std=c11 -O1 -g -Wall -Wextra -Werror -Wno-misleading-indentation \
+	  $(DS41_TEST_SANITIZE) -I. tests/test_ds41_mtp_control.c -o "$$out" && "$$out"
+	bash -n tests/ds41_mtp_http_gate.sh
+
+gate-ds41: test-ds41-batch-lifetime test-ds41-mtp-control

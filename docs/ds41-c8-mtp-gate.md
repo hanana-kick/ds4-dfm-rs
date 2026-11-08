@@ -1,0 +1,203 @@
+# DS41 C8 + MTP real-model qualification gate
+
+`tests/ds41_c8_mtp_gate.sh` checks **actual packed GPU execution**, not
+just a `--max-seqs 8` configuration. It uses a task-owned server on
+`127.0.0.1:18045` (or `DS41_C8_PORT`) and stops only that server.
+
+## Run on a single DGX Spark
+
+```bash
+git switch feat/ds41-entrpi-concurrency
+git pull --ff-only
+bash scripts/build.sh  # only needed if binary is missing or server code changed
+bash tests/ds41_c8_mtp_gate.sh
+```
+
+The default five modes run **serially** with one model loaded at a time:
+
+| Mode | Purpose |
+|---|---|
+| C1 MTP OFF | Greedy text and Vision reference |
+| C4 MTP OFF | Four-way packed decode and C1 parity |
+| C4 MTP ON | Four-way packed target verification and C1 parity |
+| C8 MTP OFF | Eight-way packed decode and C1 parity |
+| C8 MTP ON | Eight-way packed target verification and C1 parity |
+
+Each width performs long, distinct text prompts (C8 has **8 concurrent
+requests**). Mixed Vision uses two different images plus 6 independent
+texts in C8 (2 plus 2 in C4), with C1 text/image parity. The DSML tool
+step requires one `test_echo(value=ping)` invocation and a tool-result
+roundtrip. High Thinking uses explicit **positive seed 424242**,
+`temperature=1.0`, a default 8,192 output-token limit, and the committed
+yellow-face PNG. In C8 it runs **alongside seven text requests**. High
+Thinking must terminate with a nonempty final answer and without detected
+100-character repetitions. Stochastic high-thinking text is not asserted
+byte-identical across widths.
+
+Greedy text can legitimately end at the fixed 512-token test budget; this
+is a batch workload, not a requirement to finish 150 items. C1 greedy
+**parity** and observed batch/MTP behavior are required. A batch capacity
+failure, transport error, parity mismatch or unfinished/repeating high
+Thinking is a **FAIL**, not a silent fallback to a narrower width.
+
+For C8 the log gate requires:
+
+```
+[v41-batch] packed_decode rows=8 ... verify_rows=N  # N > 8 with MTP ON
+[v41-mtp] request complete rounds=R offered=O ... # R,O > 0
+```
+
+A configured width or nonzero MTP tokens **alone** cannot pass. Absence of
+`rows=8` means genuine eight-request execution was not observed. All
+screenshots, responses and logs are kept; `summary.tsv`, `summary.jsonl`,
+`parity.tsv` and `proofs.tsv` identify the observed results. This remains a
+bounded test, not long-session, quality or numerical-logit qualification.
+
+## Collect C8 evidence even when C4 tools fail
+
+The default `DS41_C8_TOOL_POLICY=record` records any invalid or failed
+tool call in `tool-failures.tsv`, skips the invalid continuation, and proceeds
+to the remaining Vision, high-thinking and C8/MTP checks. The overall
+result is still **FAIL (exit 1)**, never a false PASS. This lets the
+operator isolate C8 packed decode without repeatedly halting at the known
+C4 tool-format regression.
+
+```bash
+git pull --ff-only
+DS41_C8_MODES='c1-off c8-off c8-on' \
+  bash tests/ds41_c8_mtp_gate.sh
+
+# Old fail-fast behavior, if desired
+DS41_C8_TOOL_POLICY=strict bash tests/ds41_c8_mtp_gate.sh
+```
+
+The per-mode raw response JSON, HTTP status, server log, `summary.tsv`,
+`proofs.tsv` and `tool-failures.tsv` preserve separate tool and
+C8/MTP findings. There is no fallback that fabricates a tool call or
+changes the model's output. Real CUDA and model validation must run
+on the GB10 device.
+
+## C8 admission telemetry (requires a rebuilt server)
+
+For C8 requests that return HTTP 200 but never form a wide decode
+batch, inspect the new structured log lines from the actual native
+owner. They are emitted at most once per deferred request, not once
+per token:
+
+```bash
+git pull --ff-only
+bash scripts/build.sh
+DS41_C8_MODES='c1-off c8-off c8-on' \
+  DS41_C8_MEDIA=off DS41_C8_THINK=off \
+  bash tests/ds41_c8_mtp_gate.sh
+
+grep -hE '\[v41-admit\]|continuous rolling path' \
+  runs/ds41-c8-*/c8-*/server.log
+```
+
+The `[v41-admit] received` event proves the rolling source yielded
+another queued request. `granted` means the 2× per-request peak plus
+host memory floor was satisfied; `deferred` identifies a particular
+request that did not fit, with `peak_bytes`, `available_bytes`,
+`floor_bytes` and `required_bytes` preserved. The
+`continuous rolling path` summary reports `received`,
+`queue_empty_polls` and `route_gated_polls`. If a source reports
+`none` and there are no `received` siblings, investigate HTTP
+enqueue/routing; if a sibling is deferred repeatedly, investigate
+native peak quotes and real free memory. Do not lower the reserve or
+disable the rejection merely to observe C8 rows.
+
+A tool request returning `finish_reason=error` on C8 with a single
+active row is a **separate** DSML generation/parsing failure; increasing
+batch width or enabling MTP cannot be assumed to fix it.
+
+## C8 HTTP concurrency versus observed GPU packing
+
+Eight concurrent HTTP requests do **not** guarantee that all eight
+requests are resident and in target decode in the same GPU step. The
+scheduler admits and prefills separately, and it can wait on host
+memory headroom or retire short-lived requests before a full cohort forms.
+The server's `[v41-batch] packed_decode rows=N` line records real
+observed packed decode occupancy, not configured capacity.
+
+`DS41_C8_PROOF_POLICY=record` (default) retains any missing full-width
+proof as a **FAIL** in `proof-failures.tsv`, saves the highest
+observed row count in `proofs.tsv`, then runs the remaining modes,
+including C8 MTP ON. No 8-row or MTP proof is ever fabricated.
+
+```bash
+git pull --ff-only
+bash tests/ds41_c8_mtp_gate.sh --inspect \
+  runs/ds41-c8-20261109-004819-vIfVmp5X
+```
+
+This offline inspection reports `max_rows`, `full_width_seen` and
+`max_verify_at_width`. If `max_rows` is below 8, inspect request
+completion lengths and the server's admission/memory logs. If C8 ON
+also fails, its MTP offered-token counters are recorded independently.
+The strict early-exit behavior remains available with
+`DS41_C8_PROOF_POLICY=strict`.
+
+## Diagnose a C4 tool-request failure
+
+A message such as `FAIL: c4-off tool` means the **HTTP request check** failed
+before tool-call parsing, not that the tool parser has been proven wrong.
+Inspect the retained HTTP status, error body, curl stderr and server log
+without restarting the model:
+
+```bash
+bash tests/ds41_c8_mtp_gate.sh --inspect \
+  runs/ds41-c8-20261108-234831-HewAxAgH
+```
+
+If the saved response does not identify the cause, reproduce C4/MTP OFF
+in isolation (cold tool, two text waves, mixed image/text, warm tool):
+
+```bash
+bash tests/ds41_c8_mtp_gate.sh --probe-tool
+```
+
+A cold-only failure points to tool handling or request admission. A
+warm-only failure suggests state or capacity after the preceding requests;
+compare server logs before changing inference code. The probe does not
+qualify C8 or MTP. Neither test modifies the engine or requires a rebuild.
+
+## Options
+
+```bash
+# Fastest focused qualification, still checks against a C1 baseline
+DS41_C8_MODES='c1-off c8-on' bash tests/ds41_c8_mtp_gate.sh
+
+# Reproduce the failing image; use a distinct second image
+DS41_C8_IMAGE_A=/absolute/path/to/failing.png \
+DS41_C8_IMAGE_B=/absolute/path/to/second.jpg \
+bash tests/ds41_c8_mtp_gate.sh
+
+# Isolate batch+MTP without Vision and high Thinking
+DS41_C8_MEDIA=off DS41_C8_THINK=off \
+DS41_C8_MODES='c1-off c8-on' bash tests/ds41_c8_mtp_gate.sh
+
+# Bigger high-thinking allowance / request timeout
+DS41_C8_THINK_TOKENS=16384 DS41_C8_REQUEST_TIMEOUT=3600 \
+bash tests/ds41_c8_mtp_gate.sh
+```
+
+`DS41_C8_MODES` must start with `c1-off` and include `c8-on`. You can
+add `c1-on` to test the serial MTP path. `DS41_C8_OUT` must be a fresh,
+nonexistent directory. The script never downloads models, calls Python,
+changes clocks or kills an unrelated model owner. Stop other GPU-resident
+models before running; C8 admission can fail on insufficient headroom.
+
+## Model-free verification
+
+```bash
+bash -n tests/ds41_c8_mtp_gate.sh
+node --check tests/fixtures/ds41-c8/mock-server.cjs
+bash tests/ds41_c8_mtp_gate.sh --self-test
+bash tests/ds41_c8_mtp_mock.sh
+```
+
+The mock test checks successful C8 verification and **negative controls**:
+8-row packing missing, MTP verification missing, or `seed=0` incorrectly
+accepted. The mock synthesizes log messages, so a successful host CI check
+**never means an actual C8+MTP GPU run passed**. A real GPU run is required.

@@ -2548,3 +2548,6 @@ mod tests {
         assert!(setup_cache_on(), "an unset switch must open the gate");
     }
 }
+
+mod batch;
+pub use batch::{V41AdmissionQuote, V41Batch, V41Request, V41_BATCH_MAX};

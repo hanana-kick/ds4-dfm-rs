@@ -552,6 +552,11 @@ impl<'m> ContExec for V41ContLane<'m> {
         let mut live = Vec::<Live<'m>>::new();
         let mut pending: Option<(ContOwnedWork, Prepared)> = None;
         let mut results = Vec::new();
+        // Emit bounded admission diagnostics: a rejected slot is retried on
+        // every decode tick, so log the first refusal per request only.
+        let mut last_deferred_key: Option<usize> = None;
+        let mut source_none_logged = false;
+        eprintln!("[v41-admit] rolling epoch width={}", self.batch.width());
         loop {
             if self.batch.poisoned() || self.stop_requested.is_some_and(|f| f()) {
                 for job in live.drain(..) {
@@ -578,25 +583,93 @@ impl<'m> ContExec for V41ContLane<'m> {
                 && live.iter().all(|j| j.state.native.ready())
             {
                 if let Some(mut work) = source.next(self) {
+                    source_none_logged = false;
                     match self.prepare(&work.parsed, work.prepared.as_ref(), work.default_tokens) {
                         Ok(p) if p.budget == 0 => {
                             let result = self.zero(p, &mut work);
                             Self::settle(source, &mut results, work.key, result);
                         }
-                        Ok(p) => pending = Some((work, p)),
+                        Ok(p) => {
+                            eprintln!(
+                                "[v41-admit] received key={} live={} prompt_tokens={} output_tokens={}",
+                                work.key, live.len(), p.tokens.len(), p.budget
+                            );
+                            pending = Some((work, p));
+                        }
                         Err(e) => Self::settle(source, &mut results, work.key, Err(e)),
                     }
+                } else if !source_none_logged {
+                    eprintln!(
+                        "[v41-admit] source returned none live={} width={} (empty queue or gated peer)",
+                        live.len(),
+                        self.batch.width()
+                    );
+                    source_none_logged = true;
                 }
             }
             if let Some((mut work, p)) = pending.take() {
-                match self.batch.can_admit(&p.tokens,p.budget,p.images.as_ref()) {
-                    Ok(true)=> match self.start(p,&work.parsed,&work.job_id,work.created,work.cors,work.default_tokens,work.t_arrive,work.out.as_mut()) {
-                        Ok(state)=>live.push(Live { work,state }),
-                        Err(e)=>Self::settle(source,&mut results,work.key,Err(e)),
-                    },
-                    Ok(false) if !live.is_empty()=>pending=Some((work,p)),
-                    Ok(false)=>Self::settle(source,&mut results,work.key,Err(GenerateError::Capacity("V4.1 request exceeds current memory headroom; reduce prompt/output or retry"))),
-                    Err(e)=>Self::settle(source,&mut results,work.key,Err(engine_error(e))),
+                let quote = self.batch.admission_quote(
+                    &p.tokens,
+                    p.budget,
+                    p.images.as_ref(),
+                );
+                match quote {
+                    Ok(q) if q.fits() => {
+                        eprintln!(
+                            "[v41-admit] granted key={} live_before={} peak_bytes={} available_bytes={} required_bytes={}",
+                            work.key,
+                            live.len(),
+                            q.peak_bytes,
+                            q.available_bytes,
+                            q.required_bytes.unwrap_or(u64::MAX)
+                        );
+                        match self.start(
+                            p,
+                            &work.parsed,
+                            &work.job_id,
+                            work.created,
+                            work.cors,
+                            work.default_tokens,
+                            work.t_arrive,
+                            work.out.as_mut(),
+                        ) {
+                            Ok(state) => live.push(Live { work, state }),
+                            Err(e) => {
+                                eprintln!(
+                                    "[v41-admit] grant failed during request allocation key={} error={e}",
+                                    work.key
+                                );
+                                Self::settle(source, &mut results, work.key, Err(e));
+                            }
+                        }
+                    }
+                    Ok(q) => {
+                        if last_deferred_key != Some(work.key) {
+                            eprintln!(
+                                "[v41-admit] deferred key={} live={} peak_bytes={} available_bytes={} floor_bytes={} required_bytes={} (2x peak + floor)",
+                                work.key,
+                                live.len(),
+                                q.peak_bytes,
+                                q.available_bytes,
+                                q.floor_bytes,
+                                q.required_bytes.unwrap_or(u64::MAX)
+                            );
+                            last_deferred_key = Some(work.key);
+                        }
+                        if live.is_empty() {
+                            Self::settle(
+                                source,
+                                &mut results,
+                                work.key,
+                                Err(GenerateError::Capacity(
+                                    "V4.1 request exceeds current memory headroom; reduce prompt/output or retry",
+                                )),
+                            );
+                        } else {
+                            pending = Some((work, p));
+                        }
+                    }
+                    Err(e) => Self::settle(source, &mut results, work.key, Err(engine_error(e))),
                 }
             }
             if live.is_empty() {

@@ -2550,4 +2550,4 @@ mod tests {
 }
 
 mod batch;
-pub use batch::{V41Batch, V41Request, V41_BATCH_MAX};
+pub use batch::{V41AdmissionQuote, V41Batch, V41Request, V41_BATCH_MAX};

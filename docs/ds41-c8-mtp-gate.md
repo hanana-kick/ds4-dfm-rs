@@ -77,6 +77,40 @@ C8/MTP findings. There is no fallback that fabricates a tool call or
 changes the model's output. Real CUDA and model validation must run
 on the GB10 device.
 
+## C8 admission telemetry (requires a rebuilt server)
+
+For C8 requests that return HTTP 200 but never form a wide decode
+batch, inspect the new structured log lines from the actual native
+owner. They are emitted at most once per deferred request, not once
+per token:
+
+```bash
+git pull --ff-only
+bash scripts/build.sh
+DS41_C8_MODES='c1-off c8-off c8-on' \
+  DS41_C8_MEDIA=off DS41_C8_THINK=off \
+  bash tests/ds41_c8_mtp_gate.sh
+
+grep -hE '\[v41-admit\]|continuous rolling path' \
+  runs/ds41-c8-*/c8-*/server.log
+```
+
+The `[v41-admit] received` event proves the rolling source yielded
+another queued request. `granted` means the 2× per-request peak plus
+host memory floor was satisfied; `deferred` identifies a particular
+request that did not fit, with `peak_bytes`, `available_bytes`,
+`floor_bytes` and `required_bytes` preserved. The
+`continuous rolling path` summary reports `received`,
+`queue_empty_polls` and `route_gated_polls`. If a source reports
+`none` and there are no `received` siblings, investigate HTTP
+enqueue/routing; if a sibling is deferred repeatedly, investigate
+native peak quotes and real free memory. Do not lower the reserve or
+disable the rejection merely to observe C8 rows.
+
+A tool request returning `finish_reason=error` on C8 with a single
+active row is a **separate** DSML generation/parsing failure; increasing
+batch width or enabling MTP cannot be assumed to fix it.
+
 ## C8 HTTP concurrency versus observed GPU packing
 
 Eight concurrent HTTP requests do **not** guarantee that all eight

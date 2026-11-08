@@ -409,7 +409,19 @@ impl ContStepper {
                 self.acc.text = text;
                 self.acc.saw_tool_end = true;
             }
-            TruncationOutcome::ErrorUnterminated => self.finish = "error",
+            TruncationOutcome::ErrorUnterminated => {
+                if syntax == ModelSyntax::DeepSeek && self.req.has_tools {
+                    eprintln!(
+                        "[v41-tool] invalid_or_unterminated_dsml start={} end={} generated_bytes={} completion_tokens={} forced_prefix_tokens={}",
+                        self.acc.saw_tool_start,
+                        self.acc.saw_tool_end,
+                        self.acc.text.len(),
+                        self.acc.completion,
+                        self.required_tool_prefix.len()
+                    );
+                }
+                self.finish = "error";
+            },
             _ => {}
         }
         let mut parsed_gen = if self.req.kind == ReqKind::Chat {

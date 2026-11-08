@@ -19,6 +19,24 @@ use round::{VerifiedRound, VERIFY_MAX};
 /// target rows; native projection tiles preserve the decode arithmetic path.
 pub const V41_BATCH_MAX: usize = 8;
 
+/// One reservation quote. The native per-request peak is deliberately
+/// multiplied by two and added to the configured host floor; never reduce
+/// either limit just to make a test report a wider batch.
+#[derive(Clone, Copy, Debug)]
+pub struct V41AdmissionQuote {
+    pub peak_bytes: u64,
+    pub available_bytes: u64,
+    pub floor_bytes: u64,
+    pub required_bytes: Option<u64>,
+}
+
+impl V41AdmissionQuote {
+    pub fn fits(self) -> bool {
+        admission_fits(self.peak_bytes, self.available_bytes, self.floor_bytes)
+    }
+}
+
+
 /// Shared target verification workspace, with request-local MTP state.
 /// Requests borrow the same model and cannot be moved to another host thread.
 pub struct V41Batch<'m> {
@@ -242,6 +260,18 @@ impl<'m> V41Batch<'m> {
         output: usize,
         images: Option<&V41Images>,
     ) -> Result<bool> {
+        Ok(self.admission_quote(prompt, output, images)?.fits())
+    }
+
+    /// Quote the exact same conservative admission gate, including 2x
+    /// transient band, for source-backed rolling diagnostics. No allocations
+    /// are made and this method never overrides an admission refusal.
+    pub fn admission_quote(
+        &self,
+        prompt: &[i32],
+        output: usize,
+        images: Option<&V41Images>,
+    ) -> Result<V41AdmissionQuote> {
         if self.poisoned {
             return Err(asset_error("V4.1 batch is poisoned; restart the server"));
         }
@@ -279,11 +309,16 @@ impl<'m> V41Batch<'m> {
         let avail = mem_available_mb()
             .and_then(|m| u64::try_from(m).ok())
             .ok_or_else(|| asset_error("cannot read host MemAvailable for V4.1 admission"))?;
-        Ok(admission_fits(
-            peak,
-            avail.saturating_mul(1 << 20),
-            self.floor_bytes,
-        ))
+        let available_bytes = avail.saturating_mul(1 << 20);
+        let required_bytes = peak
+            .checked_mul(2)
+            .and_then(|v| v.checked_add(self.floor_bytes));
+        Ok(V41AdmissionQuote {
+            peak_bytes: peak,
+            available_bytes,
+            floor_bytes: self.floor_bytes,
+            required_bytes,
+        })
     }
 
     pub fn request(
@@ -703,6 +738,28 @@ fn penalize(row: &mut [f32], gen: &[i32], breakers: Option<&[bool]>, f: V41Sampl
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn admission_quote_reports_required_and_available_bytes_without_relaxing_floor() {
+        let fit = V41AdmissionQuote {
+            peak_bytes: 4,
+            available_bytes: 12,
+            floor_bytes: 4,
+            required_bytes: Some(12),
+        };
+        assert!(fit.fits());
+        let low = V41AdmissionQuote {
+            available_bytes: 11,
+            ..fit
+        };
+        assert!(!low.fits());
+        let overflow = V41AdmissionQuote {
+            peak_bytes: u64::MAX,
+            required_bytes: None,
+            ..fit
+        };
+        assert!(!overflow.fits());
+    }
+
     #[test]
     fn admission_keeps_reserve_and_rejects_overflow() {
         assert!(admission_fits(4, 12, 4));

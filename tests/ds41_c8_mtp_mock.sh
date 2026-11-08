@@ -105,4 +105,29 @@ grep -Fq '[ds41-c8] completed c8-on' "$TMP/record-tool-failure.log" || {
 }
 unset DS41_C8_MOCK_TOOL_ERROR_WIDTH DS41_C8_MOCK_TOOL_ERROR DS41_C8_TOOL_POLICY
 
-echo 'ds41-c8-mtp mock: C8 MTP, C4 diagnosis, fail-but-continue and seed guard PASS'
+# A missing C8-OFF eight-row proof must not suppress C8-ON qualification.
+# Both modes run, while the overall test still returns FAIL.
+export DS41_C8_MODES='c1-off c8-off c8-on'
+export DS41_C8_MEDIA=off
+export DS41_C8_THINK=off
+export DS41_C8_PROOF_POLICY=record
+export DS41_C8_MOCK_OMIT_BATCH=on
+export DS41_C8_MOCK_OMIT_BATCH_MODE=off
+export DS41_C8_OUT="$TMP/record-proof-failure"
+rc=0
+bash "$ROOT/tests/ds41_c8_mtp_gate.sh" > "$TMP/record-proof-failure.log" 2>&1 || rc=$?
+[[ "$rc" == 1 ]] || { echo "missing C8-OFF proof should fail, got $rc" >&2; exit 1; }
+grep -Fq '[ds41-c8] completed c8-on' "$TMP/record-proof-failure.log"
+grep -q 
+c8-off\tmissing real C8 packed GPU step' \
+  "$TMP/record-proof-failure/proof-failures.tsv"
+grep -q 
+c8-on\trows=8\tMTP=on\tobserved' \
+  "$TMP/record-proof-failure/proofs.tsv"
+bash "$ROOT/tests/ds41_c8_mtp_gate.sh" --inspect \
+  "$TMP/record-proof-failure" > "$TMP/proof-inspection.txt"
+grep -q 'c8-off packed peak: max_rows=0, full_width_seen=0' \
+  "$TMP/proof-inspection.txt"
+unset DS41_C8_PROOF_POLICY DS41_C8_MOCK_OMIT_BATCH_MODE DS41_C8_MOCK_OMIT_BATCH
+
+echo 'ds41-c8-mtp mock: C8 MTP, C4 failure, C8 proof-failure continuation and seed guard PASS'

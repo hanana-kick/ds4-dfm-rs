@@ -24,6 +24,7 @@ IMAGE_B="${DS41_C8_IMAGE_B:-$ROOT/tests/fixtures/chat-template/images/blue.png}"
 MEDIA="${DS41_C8_MEDIA:-on}"
 THINK="${DS41_C8_THINK:-on}"
 TOOL_POLICY="${DS41_C8_TOOL_POLICY:-record}"
+PROOF_POLICY="${DS41_C8_PROOF_POLICY:-record}"
 WIDTHS="${DS41_C8_MODES:-c1-off c4-off c4-on c8-off c8-on}"
 OUT=''
 PID=''
@@ -43,6 +44,8 @@ DS41_C8_IMAGE_A=/path/a.png  DS41_C8_IMAGE_B=/path/b.png
 DS41_C8_MEDIA=on|off  DS41_C8_THINK=on|off
 DS41_C8_TOOL_POLICY=record|strict (record: continue after tool failure,
   preserve failure evidence and finish with FAIL; strict: stop immediately)
+DS41_C8_PROOF_POLICY=record|strict (record: continue if a full C8 batch was
+  not observed, preserve peak-row evidence and finish with FAIL)
 DS41_C8_TEXT_TOKENS=512  DS41_C8_THINK_TOKENS=8192
 DS41_C8_SEED=424242 (nonzero fixed; seed=0 uses native clock entropy)
 DS41_C8_PORT=18045  DS41_C8_REQUEST_TIMEOUT=2400
@@ -87,6 +90,38 @@ request_failed() {
   inspect_tool "$OUT" "$mode" "$name" >&2
   fail "$mode $name request rejected or invalid HTTP response"
 }
+# A logged rows=N is evidence of an actual packed decoding step. The
+# server logs new peak row counts, not its configured --max-seqs setting.
+batch_metrics() {
+  local log=$1 width=$2
+  awk -v width="$width" '
+    /\[v41-batch\] packed_decode rows=/ {
+      r=-1; v=-1
+      for (i=1; i<=NF; i++) {
+        if ($i ~ /^rows=/) { split($i,a,"="); r=a[2]+0 }
+        if ($i ~ /^verify_rows=/) { split($i,b,"="); v=b[2]+0 }
+      }
+      if (r>max_rows) max_rows=r
+      if (r==width) {
+        full=1
+        if (v>max_full_verify) max_full_verify=v
+      }
+    }
+    END { printf "%d %d %d\n",max_rows,max_full_verify,full }
+  ' "$log"
+}
+inspect_batch() {
+  local dir=$1 mode=$2 width=${2:1:1} log="$1/$2/server.log"
+  [[ -s "$log" ]] || return 0
+  local max_rows max_full_verify full
+  read -r max_rows max_full_verify full < <(batch_metrics "$log" "$width")
+  printf '[ds41-c8] %s packed peak: max_rows=%s, full_width_seen=%s, max_verify_at_width=%s\n' \
+    "$mode" "$max_rows" "$full" "$max_full_verify"
+  if [[ -s "$dir/$mode/text-1.response.json" ]]; then
+    jq -c '{finish:(.choices[0].finish_reason//null),completion_tokens:(.usage.completion_tokens//null)}' \
+      "$dir/$mode/text-1.response.json" || true
+  fi
+}
 stop_server() {
   if [[ -z "$PID" ]]; then return; fi
   kill -TERM "$PID" 2>/dev/null || true
@@ -108,6 +143,7 @@ case "${1:-}" in
     [[ $# -eq 2 && -d "$2" ]] || die 'usage: --inspect EXISTING_RUN_DIRECTORY'
     command -v jq >/dev/null || die 'jq required for inspection'
     for mode in c1-off c4-off c4-on c8-off c8-on; do
+      inspect_batch "$2" "$mode"
       for case_id in tool tool-cold tool-warm tool-followup; do
         inspect_tool "$2" "$mode" "$case_id"
       done
@@ -137,6 +173,7 @@ done
 [[ "$MEDIA" == on || "$MEDIA" == off ]] || die 'DS41_C8_MEDIA must be on|off'
 [[ "$THINK" == on || "$THINK" == off ]] || die 'DS41_C8_THINK must be on|off'
 [[ "$TOOL_POLICY" == record || "$TOOL_POLICY" == strict ]] || die 'DS41_C8_TOOL_POLICY must be record|strict'
+[[ "$PROOF_POLICY" == record || "$PROOF_POLICY" == strict ]] || die 'DS41_C8_PROOF_POLICY must be record|strict'
 [[ -x "$LAUNCHER" && -x "$BIN" ]] || die 'build first: bash scripts/build.sh'
 [[ -s "$MODEL" && -s "$VISION" && -d "$ENGRAM" ]] || die 'model/Engram/Vision missing'
 for shard in model-00047-of-00048.safetensors model-00048-of-00048.safetensors; do
@@ -307,36 +344,61 @@ wave() {
     record "$mode" "$prefix$name" "$effort"
   done
 }
+proof_failure() {
+  local mode=$1 cause=$2 max_rows=$3 max_full_verify=$4
+  proof_failures=$((proof_failures + 1))
+  printf '%s\t%s\t%s\t%s\n' "$mode" "$cause" "$max_rows" "$max_full_verify" \
+    >> "$OUT/proof-failures.tsv"
+  printf '[ds41-c8] RECORDED PROOF FAIL: %s — %s (max_rows=%s, max_verify_at_width=%s); continuing\n' \
+    "$mode" "$cause" "$max_rows" "$max_full_verify" >&2
+  if [[ "$PROOF_POLICY" == strict ]]; then fail "$mode: $cause"; fi
+}
 prove_batch() {
-  local mode=$1 width=${1:1:1} mtp=${1##*-}
+  local mode=$1 width=${1:1:1} mtp=${1##*-} log="$OUT/$1/server.log"
   if [[ "$width" == 1 ]]; then
-    if [[ "$mtp" == on ]]; then
-      grep -q 'DSpark drafter armed' "$OUT/$mode/server.log" || fail "missing C1 MTP activation log"
+    if [[ "$mtp" == on ]] && ! grep -q 'DSpark drafter armed' "$log"; then
+      proof_failure "$mode" 'missing C1 MTP activation log' 0 0
     fi
     return 0
   fi
-  local log="$OUT/$mode/server.log"
-  awk -v width="$width" -v mtp="$mtp" '
-    /\[v41-batch\] packed_decode rows=/ {
-      rows=-1; verify=-1
-      for(i=1;i<=NF;i++) {
-        if($i ~ /^rows=/) { split($i,a,"="); rows=a[2]+0 }
-        if($i ~ /^verify_rows=/) { split($i,b,"="); verify=b[2]+0 }
-      }
-      if(rows==width) { packed=1; if(verify>width) draft=1 }
-    }
-    END { if(!packed || (mtp=="on" && !draft)) exit 1 }
-  ' "$log" || fail "missing real C$width packed GPU step or MTP verify_rows>$width"
-  if [[ "$mtp" == on ]]; then
-    grep -Eq '\[v41-mtp\] request complete rounds=[1-9][0-9]* offered=[1-9][0-9]*' "$log" || fail "$mode MTP offered-token counters absent"
+  local max_rows max_full_verify full_width proof_ok=1
+  read -r max_rows max_full_verify full_width < <(batch_metrics "$log" "$width")
+  # Per actual GPU log, eight client requests may produce fewer than eight
+  # simultaneous decode rows. Preserve the actual peak for diagnosis.
+  if (( full_width == 0 )); then
+    proof_ok=0
+    proof_failure "$mode" "missing real C$width packed GPU step" \
+      "$max_rows" "$max_full_verify"
   fi
-  if grep -Eqi 'rollback check FAIL|CUDA error|illegal memory access' "$log"; then fail "$mode native CUDA failure"; fi
-  printf '%s\trows=%s\tMTP=%s\tobserved\n' "$mode" "$width" "$mtp" >> "$OUT/proofs.tsv"
+  if [[ "$mtp" == on ]]; then
+    if (( max_full_verify <= width )); then
+      proof_ok=0
+      proof_failure "$mode" "MTP verify_rows>$width not observed at full width" \
+        "$max_rows" "$max_full_verify"
+    fi
+    if ! grep -Eq '\[v41-mtp\] request complete rounds=[1-9][0-9]* offered=[1-9][0-9]*' "$log"; then
+      proof_ok=0
+      proof_failure "$mode" 'MTP offered-token counters absent' \
+        "$max_rows" "$max_full_verify"
+    fi
+  fi
+  if grep -Eqi 'rollback check FAIL|CUDA error|illegal memory access' "$log"; then
+    fail "$mode native CUDA failure"
+  fi
+  if (( proof_ok == 1 )); then
+    printf '%s\trows=%s\tMTP=%s\tobserved\tmax_rows=%s\tmax_verify_at_width=%s\n' \
+      "$mode" "$width" "$mtp" "$max_rows" "$max_full_verify" >> "$OUT/proofs.tsv"
+  else
+    printf '%s\trows=%s\tMTP=%s\tNOT_OBSERVED\tmax_rows=%s\tmax_verify_at_width=%s\n' \
+      "$mode" "$width" "$mtp" "$max_rows" "$max_full_verify" >> "$OUT/proofs.tsv"
+  fi
 }
 
 : > "$OUT/summary.jsonl"
 printf 'mode\tcase\tparity\n' > "$OUT/parity.tsv"
-printf 'mode\twidth\tmtp\tresult\n' > "$OUT/proofs.tsv"
+printf 'mode\twidth\tmtp\tresult\tmax_rows\tmax_verify_at_width\n' > "$OUT/proofs.tsv"
+printf 'mode\treason\tmax_rows\tmax_verify_at_width\n' > "$OUT/proof-failures.tsv"
+proof_failures=0
 tool_failures=0
 printf 'mode\tcase\treason\n' > "$OUT/tool-failures.tsv"
 tool_failure() {
@@ -476,10 +538,10 @@ done
 jq -r -s '(["mode","case","status","finish","reasoning_chars","answer_chars","tokens"]|@tsv),
   (.[]|[.mode,.case,.status,.finish,(.reasoning_chars|tostring),(.answer_chars|tostring),(.completion_tokens|tostring)]|@tsv)' \
   "$OUT/summary.jsonl" > "$OUT/summary.tsv"
-cat "$OUT/proofs.tsv" "$OUT/parity.tsv" "$OUT/tool-failures.tsv"
-if (( tool_failures > 0 )); then
-  printf '[ds41-c8] FAIL: %s tool failure(s) recorded; packed/MTP evidence collected. evidence: %s\n' \
-    "$tool_failures" "$OUT" >&2
+cat "$OUT/proofs.tsv" "$OUT/parity.tsv" "$OUT/tool-failures.tsv" "$OUT/proof-failures.tsv"
+if (( tool_failures > 0 || proof_failures > 0 )); then
+  printf '[ds41-c8] FAIL: tool failures=%s, GPU proof failures=%s; all configured modes examined. evidence: %s\n' \
+    "$tool_failures" "$proof_failures" "$OUT" >&2
   exit 1
 fi
 printf '[ds41-c8] PASS: C8 packed decode/MTP verified with greedy parity, tools and reasoning; evidence: %s\n' "$OUT"

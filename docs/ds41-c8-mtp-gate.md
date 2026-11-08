@@ -77,6 +77,33 @@ C8/MTP findings. There is no fallback that fabricates a tool call or
 changes the model's output. Real CUDA and model validation must run
 on the GB10 device.
 
+## C8 HTTP concurrency versus observed GPU packing
+
+Eight concurrent HTTP requests do **not** guarantee that all eight
+requests are resident and in target decode in the same GPU step. The
+scheduler admits and prefills separately, and it can wait on host
+memory headroom or retire short-lived requests before a full cohort forms.
+The server's `[v41-batch] packed_decode rows=N` line records real
+observed packed decode occupancy, not configured capacity.
+
+`DS41_C8_PROOF_POLICY=record` (default) retains any missing full-width
+proof as a **FAIL** in `proof-failures.tsv`, saves the highest
+observed row count in `proofs.tsv`, then runs the remaining modes,
+including C8 MTP ON. No 8-row or MTP proof is ever fabricated.
+
+```bash
+git pull --ff-only
+bash tests/ds41_c8_mtp_gate.sh --inspect \
+  runs/ds41-c8-20261109-004819-vIfVmp5X
+```
+
+This offline inspection reports `max_rows`, `full_width_seen` and
+`max_verify_at_width`. If `max_rows` is below 8, inspect request
+completion lengths and the server's admission/memory logs. If C8 ON
+also fails, its MTP offered-token counters are recorded independently.
+The strict early-exit behavior remains available with
+`DS41_C8_PROOF_POLICY=strict`.
+
 ## Diagnose a C4 tool-request failure
 
 A message such as `FAIL: c4-off tool` means the **HTTP request check** failed

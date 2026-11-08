@@ -3,7 +3,9 @@ const http = require('node:http');
 const crypto = require('node:crypto');
 const width = Number(process.env.DS41_MAX_SEQS || 1);
 const mtp = process.env.DS41_MTP_MODE === 'on';
-const omitBatch = process.env.DS41_C8_MOCK_OMIT_BATCH === 'on';
+const omitBatch = process.env.DS41_C8_MOCK_OMIT_BATCH === 'on' &&
+  (!process.env.DS41_C8_MOCK_OMIT_BATCH_MODE ||
+   process.env.DS41_C8_MOCK_OMIT_BATCH_MODE === (mtp ? 'on' : 'off'));
 const omitMtp = process.env.DS41_C8_MOCK_OMIT_MTP === 'on';
 const port = Number(process.env.DS41_PORT || 18045);
 const modelId = process.env.DS41_MODEL_ID || 'big';

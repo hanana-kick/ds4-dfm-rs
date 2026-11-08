@@ -122,7 +122,13 @@ eight verdict scenarios without GPU or weights.
 
 Use `tests/ds41_seed_repro_gate.sh` for a seeded, repeatable
 **C1/MTP-off** experiment. This is separate from the fixed-seed 8K/16K
-termination check above.
+termination check above. The default fixed seeds are 1–10 and 424242
+(**never 0**): native YoungAi V4.1 treats `seed=0` as an instruction to
+draw a wall-clock seed. Explicit `DS41_REPRO_SEEDS='0 ...'` is rejected
+before starting the model. If an older run contains seed 0, recomputing
+its report marks that row `clock_seed_ungraded`, excluded from the
+fixed-seed pass/fail rate. Its 8K/16K/32K generations are independent
+random draws, **not** evidence that a larger budget fixed the output.
 
 ```bash
 git pull --ff-only
@@ -175,6 +181,9 @@ DS41_REPRO_REFERENCE_URL=http://127.0.0.1:8001 \
 bash tests/ds41_seed_repro_gate.sh --report \
   /absolute/path/to/runs/ds41-seeds-...
 ```
+
+For previous runs containing seed 0, use `--report` to reclassify
+the existing evidence without another costly model run.
 
 Reference replay uses the **saved exact payloads**, changing only
 `model` when `DS41_REPRO_REFERENCE_MODEL_ID` is set. It targets

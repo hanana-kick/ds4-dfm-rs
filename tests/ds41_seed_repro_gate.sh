@@ -16,7 +16,7 @@ MODEL_ID="${DS41_MODEL_ID:-big}"
 PORT="${DS41_REPRO_PORT:-18043}"
 TIMEOUT="${DS41_REPRO_REQUEST_TIMEOUT:-2400}"
 BOOT_TIMEOUT="${DS41_REPRO_BOOT_TIMEOUT:-600}"
-SEEDS="${DS41_REPRO_SEEDS:-0 1 2 3 4 5 6 7 8 9 424242}"
+SEEDS="${DS41_REPRO_SEEDS:-1 2 3 4 5 6 7 8 9 10 424242}"
 TEMP="${DS41_REPRO_TEMPERATURE:-1.0}"
 BASE="${DS41_REPRO_BASE_TOKENS:-8192}"
 EXT="${DS41_REPRO_EXT_TOKENS:-16384}"
@@ -40,7 +40,8 @@ requests twice per seed. Failures/unstable outputs retry at 16384
 and, if necessary, 32768. A greedy probe is also saved for
 cross-engine comparison. No concurrent model copies are started.
 
-DS41_REPRO_SEEDS='0 1 2 ... 424242'    (1..64 unique integer seeds)
+DS41_REPRO_SEEDS='1 2 3 ... 10 424242'  (1..64 unique positive seeds)
+Seed 0 is NOT deterministic: YoungAi V4.1 replaces 0 with clock entropy.
 DS41_REPRO_TEMPERATURE=1.0
 DS41_REPRO_IMAGE=/path/to/original.png
 DS41_REPRO_TEXT_ONLY=on
@@ -163,7 +164,8 @@ read -r -a LIST <<< "$SEEDS"
 (( ${#LIST[@]} > 0 && ${#LIST[@]} <= 64 )) || die 'need 1..64 seeds'
 declare -A SEEN=()
 for seed in "${LIST[@]}"; do
-  [[ "$seed" =~ ^(0|[1-9][0-9]{0,8})$ ]] || die "invalid seed: $seed"
+  [[ "$seed" =~ ^[1-9][0-9]{0,8}$ ]] ||
+    die "invalid fixed seed: $seed (V4.1 seed=0 selects clock entropy; use 1..999999999)"
   [[ ! -v SEEN[$seed] ]] || die "duplicate seed: $seed"
   SEEN[$seed]=1
 done

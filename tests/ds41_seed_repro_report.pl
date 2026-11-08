@@ -24,6 +24,15 @@ sub outcome {
     return $equal ? 'reproducible_failure' : 'varying_failure';
 }
 
+# Native V4.1 uses time/getpid/clock when the requested seed equals 0.
+# Older sweeps included zero incorrectly: preserve evidence, exclude from
+# fixed-seed reproducibility rates, and never interpret budget differences.
+sub seed_outcome {
+    my ($seed, $a, $b, $equal) = @_;
+    return 'clock_seed_ungraded' if "$seed" eq '0';
+    return outcome($a, $b, $equal);
+}
+
 sub engine_contrast {
     my ($local, $reference) = @_;
     return 'reference_not_run' unless ref($reference) eq 'HASH';
@@ -107,6 +116,8 @@ sub self_test {
         [outcome($bad,$bad,1),'reproducible_failure'],
         [outcome($bad,$repeat,0),'varying_failure'],
         [outcome($bad,undef,0),'missing'],
+        [seed_outcome(0,$bad,$bad,0),'clock_seed_ungraded'],
+        [seed_outcome(1,$bad,$bad,1),'reproducible_failure'],
         [seed_report($bad,$bad,1,$good,undef,undef)->{replay},'completed_at_16k'],
         [seed_report($bad,$bad,1,$bad,$good,undef)->{replay},'completed_at_32k'],
         [seed_report($bad,$bad,1,$bad,$bad,undef)->{replay},'still_failed_at_32k'],
@@ -153,6 +164,7 @@ my $failed = 0;
 my $passed = 0;
 my $unstable = 0;
 my $ref_count = 0;
+my $clock_excluded = 0;
 for my $seed (sort { $a <=> $b } keys %seeds) {
     my $id = "seed-$seed";
     my $a = $get->("$id-a",'local');
@@ -165,12 +177,17 @@ for my $seed (sort { $a <=> $b } keys %seeds) {
     my $ref = $get->("$id-a",'reference');
     my $row = seed_report($a,$b,$same,$ext,$long,$ref);
     $row->{seed} = 0 + $seed;
+    $row->{status} = seed_outcome($seed,$a,$b,$same);
+    if ($row->{status} eq 'clock_seed_ungraded') {
+        $row->{replay} = 'clock_seed_budget_incomparable';
+        $row->{reference} = 'clock_seed_reference_incomparable';
+    }
     $row->{same_response} = $same ? JSON::PP::true : JSON::PP::false;
     $row->{reference_complete} = success($ref) ? JSON::PP::true : JSON::PP::false;
     $ref_count++ if ref($ref) eq 'HASH';
 
     my $prefix = undef;
-    if (ref($a) eq 'HASH' && ($a->{finish_reason} // '') eq 'length') {
+    if ($seed ne '0' && ref($a) eq 'HASH' && ($a->{finish_reason} // '') eq 'length') {
         my $short = reason("$out/local/$id-a.response.json");
         my $longer = reason("$out/local/$id-16k.response.json");
         if (length($short) && length($longer)) {
@@ -178,7 +195,9 @@ for my $seed (sort { $a <=> $b } keys %seeds) {
         }
     }
     $row->{extended_prefix_match} = $prefix;
-    if ($row->{status} eq 'pass') {
+    if ($row->{status} eq 'clock_seed_ungraded') {
+        $clock_excluded++;
+    } elsif ($row->{status} eq 'pass') {
         $passed++;
     } elsif ($row->{status} eq 'missing') {
         $incomplete++;
@@ -194,13 +213,17 @@ my $greedy_ref = $response->('greedy','reference');
 my $greedy_match = defined($greedy_local) && defined($greedy_ref)
     ? ($greedy_local eq $greedy_ref ? JSON::PP::true : JSON::PP::false) : undef;
 my $report = {
-    verdict => $incomplete ? 'INCONCLUSIVE' : $failed ? 'FAIL' : 'PASS',
+    verdict => $incomplete || ($passed + $failed == 0)
+        ? 'INCONCLUSIVE' : $failed ? 'FAIL' : 'PASS',
     seeds_tested => scalar(@rows),
+    fixed_seeds_tested => $passed + $failed + $incomplete,
+    clock_seeds_excluded => $clock_excluded,
     passed => $passed, failed => $failed,
     incomplete => $incomplete, unstable => $unstable,
     reference_runs => $ref_count,
     greedy_reference_exact_match => $greedy_match,
-    attribution => 'Non-greedy seeds alone cannot prove engine or quantization defects; '
+    attribution => 'Seed 0 selects native clock entropy and is excluded; '
+        . 'non-greedy seeds alone cannot prove engine or quantization defects; '
         . 'confirm identical weights, template, sampler and logit parity.',
     rows => \@rows,
 };
@@ -214,13 +237,14 @@ for my $r (@rows) {
     my $prefix = !defined($r->{extended_prefix_match}) ? 'not_checked'
         : $r->{extended_prefix_match} ? 'MATCH' : 'MISMATCH';
     print {$tsv} join("\t", $r->{seed},$r->{status},
-        $r->{same_response} ? 'yes' : 'no',
+        $r->{status} eq 'clock_seed_ungraded' ? 'not_applicable'
+            : $r->{same_response} ? 'yes' : 'no',
         $r->{baseline_a}{status} // 'missing',
         $r->{baseline_b}{status} // 'missing',
         $r->{replay},$prefix,$r->{reference}), "\n";
 }
 close $tsv;
 print "seed-sweep verdict=$report->{verdict} pass=$passed fail=$failed "
-    . "incomplete=$incomplete ref=$ref_count\n";
+    . "incomplete=$incomplete clock_excluded=$clock_excluded ref=$ref_count\n";
 print "evidence: $out/report.tsv $out/report.json\n";
-exit($incomplete ? 2 : $failed ? 1 : 0);
+exit($incomplete || ($passed + $failed == 0) ? 2 : $failed ? 1 : 0);

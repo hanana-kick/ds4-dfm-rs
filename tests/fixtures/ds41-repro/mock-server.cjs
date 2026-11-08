@@ -29,8 +29,8 @@ const server = http.createServer(async (req, res) => {
 
   const seed = Number(payload.seed);
   const maxTokens = Number(payload.max_tokens);
-  const truncated = seed === 0 && maxTokens <= 8192 && payload.temperature !== 0;
-  const reasoning = seed === 0
+  const truncated = seed === 17 && maxTokens <= 8192 && payload.temperature !== 0;
+  const reasoning = seed === 17
     ? (truncated ? 'Examining the icon.' : 'Examining the icon. The shape is recognizable.')
     : 'A brief recognition of an abstract icon.';
   const answer = truncated ? '' : 'An abstract yellow icon.';

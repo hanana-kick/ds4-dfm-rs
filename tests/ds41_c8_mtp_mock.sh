@@ -4,6 +4,19 @@ set -Eeuo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 TMP=$(mktemp -d)
 trap 'rm -rf -- "$TMP"' EXIT
+# Preserve actionable CI evidence when a negative assertion fails.
+mock_failure() {
+  local code=$? line=$1 command=$2
+  printf 'mock failure line=%s exit=%s command=%s\n' "$line" "$code" "$command" >&2
+  for path in "$TMP/no-mtp.txt" "$TMP/no-batch.txt"       "$TMP/record-proof-failure.log" "$TMP/proof-inspection.txt"; do
+    if [[ -s "$path" ]]; then
+      printf '%s (last 25 lines):\n' "$path" >&2
+      tail -n 25 "$path" >&2
+    fi
+  done
+  exit "$code"
+}
+trap 'mock_failure "$LINENO" "$BASH_COMMAND"' ERR
 for cmd in node jq curl ss; do command -v "$cmd" >/dev/null; done
 mkdir -p "$TMP/engram"
 printf 'fake model\n' > "$TMP/model.gguf"

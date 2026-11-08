@@ -118,11 +118,9 @@ rc=0
 bash "$ROOT/tests/ds41_c8_mtp_gate.sh" > "$TMP/record-proof-failure.log" 2>&1 || rc=$?
 [[ "$rc" == 1 ]] || { echo "missing C8-OFF proof should fail, got $rc" >&2; exit 1; }
 grep -Fq '[ds41-c8] completed c8-on' "$TMP/record-proof-failure.log"
-grep -q 
-c8-off\tmissing real C8 packed GPU step' \
+awk -F '\t' '$1=="c8-off" && $2 ~ /missing real C8 packed GPU step/ {found=1} END{exit !found}' \
   "$TMP/record-proof-failure/proof-failures.tsv"
-grep -q 
-c8-on\trows=8\tMTP=on\tobserved' \
+awk -F '\t' '$1=="c8-on" && $2=="rows=8" && $3=="MTP=on" && $4=="observed" {found=1} END{exit !found}' \
   "$TMP/record-proof-failure/proofs.tsv"
 bash "$ROOT/tests/ds41_c8_mtp_gate.sh" --inspect \
   "$TMP/record-proof-failure" > "$TMP/proof-inspection.txt"

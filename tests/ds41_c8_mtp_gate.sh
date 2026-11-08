@@ -23,6 +23,7 @@ IMAGE_A="${DS41_C8_IMAGE_A:-$ROOT/tests/fixtures/ds41-repetition/yellow-face.png
 IMAGE_B="${DS41_C8_IMAGE_B:-$ROOT/tests/fixtures/chat-template/images/blue.png}"
 MEDIA="${DS41_C8_MEDIA:-on}"
 THINK="${DS41_C8_THINK:-on}"
+TOOL_POLICY="${DS41_C8_TOOL_POLICY:-record}"
 WIDTHS="${DS41_C8_MODES:-c1-off c4-off c4-on c8-off c8-on}"
 OUT=''
 PID=''
@@ -40,6 +41,8 @@ DSML tool roundtrip, and seeded high-thinking. Requires actual GPU logs:
 DS41_C8_MODES='c1-off c8-off c8-on' (requires c1-off; optional c1-on)
 DS41_C8_IMAGE_A=/path/a.png  DS41_C8_IMAGE_B=/path/b.png
 DS41_C8_MEDIA=on|off  DS41_C8_THINK=on|off
+DS41_C8_TOOL_POLICY=record|strict (record: continue after tool failure,
+  preserve failure evidence and finish with FAIL; strict: stop immediately)
 DS41_C8_TEXT_TOKENS=512  DS41_C8_THINK_TOKENS=8192
 DS41_C8_SEED=424242 (nonzero fixed; seed=0 uses native clock entropy)
 DS41_C8_PORT=18045  DS41_C8_REQUEST_TIMEOUT=2400
@@ -133,6 +136,7 @@ done
 [[ "$SEED" =~ ^[1-9][0-9]{0,8}$ ]] || die 'nonzero fixed seed required (1..999999999)'
 [[ "$MEDIA" == on || "$MEDIA" == off ]] || die 'DS41_C8_MEDIA must be on|off'
 [[ "$THINK" == on || "$THINK" == off ]] || die 'DS41_C8_THINK must be on|off'
+[[ "$TOOL_POLICY" == record || "$TOOL_POLICY" == strict ]] || die 'DS41_C8_TOOL_POLICY must be record|strict'
 [[ -x "$LAUNCHER" && -x "$BIN" ]] || die 'build first: bash scripts/build.sh'
 [[ -s "$MODEL" && -s "$VISION" && -d "$ENGRAM" ]] || die 'model/Engram/Vision missing'
 for shard in model-00047-of-00048.safetensors model-00048-of-00048.safetensors; do
@@ -333,6 +337,19 @@ prove_batch() {
 : > "$OUT/summary.jsonl"
 printf 'mode\tcase\tparity\n' > "$OUT/parity.tsv"
 printf 'mode\twidth\tmtp\tresult\n' > "$OUT/proofs.tsv"
+tool_failures=0
+printf 'mode\tcase\treason\n' > "$OUT/tool-failures.tsv"
+tool_failure() {
+  local mode=$1 case_id=$2 reason=$3
+  tool_failures=$((tool_failures + 1))
+  printf '%s\t%s\t%s\n' "$mode" "$case_id" "$reason" >> "$OUT/tool-failures.tsv"
+  inspect_tool "$OUT" "$mode" "$case_id" >&2
+  printf '[ds41-c8] RECORDED FAIL: %s/%s (%s); continuing to later modes\n' \
+    "$mode" "$case_id" "$reason" >&2
+  if [[ "$TOOL_POLICY" == strict ]]; then
+    fail "$mode/$case_id: $reason"
+  fi
+}
 if [[ "$TOOL_PROBE" == on ]]; then
   boot c4-off
   for round in cold warm; do
@@ -389,23 +406,52 @@ for mode in "${MODES[@]}"; do
       for ((i=1;i<=width-2;i++)); do compare "text-$i" "$mode" "media-text-$i"; done
     fi
   fi
-  request tool "$OUT/$mode/tool" || request_failed "$mode" tool
-  record "$mode" tool low
-  jq -e '.choices[0].finish_reason=="tool_calls" and
-      (.choices[0].message.tool_calls|length)==1 and
-      .choices[0].message.tool_calls[0].function.name=="test_echo" and
-      ((.choices[0].message.tool_calls[0].function.arguments|fromjson).value=="ping")' \
-    "$OUT/$mode/tool.response.json" >/dev/null || fail "$mode tool-call parse"
-  jq -s --arg model "$MODEL_ID" '{model:$model,stream:false,temperature:0,
-    reasoning_effort:"none",max_tokens:256,
-    messages:(.[0].messages + [.[1].choices[0].message,
-      {role:"tool",tool_call_id:.[1].choices[0].message.tool_calls[0].id,content:"ping"},
-      {role:"user",content:"Repeat the tool result exactly, do not call a tool."}])}' \
-    "$OUT/payloads/tool.json" "$OUT/$mode/tool.response.json" > "$OUT/payloads/tool-followup.json"
-  request tool-followup "$OUT/$mode/tool-followup" || request_failed "$mode" tool-followup
-  record "$mode" tool-followup none
-  jq -e '(.choices[0].message.content // "") | contains("ping")' \
-    "$OUT/$mode/tool-followup.response.json" >/dev/null || fail "$mode lost tool result"
+  # Tool failures are evidence, not permission to claim a pass. In 'record'
+  # mode they must not hide C8 packed-MTP, Vision, or Thinking results.
+  tool_valid=0
+  if request tool "$OUT/$mode/tool"; then
+    record "$mode" tool low
+    if jq -e '.choices[0].finish_reason=="tool_calls" and
+        (.choices[0].message.tool_calls|length)==1 and
+        .choices[0].message.tool_calls[0].function.name=="test_echo" and
+        ((.choices[0].message.tool_calls[0].function.arguments|fromjson).value=="ping")' \
+      "$OUT/$mode/tool.response.json" >/dev/null; then
+      tool_valid=1
+    else
+      tool_failure "$mode" tool 'no valid test_echo tool call'
+    fi
+  else
+    if [[ -s "$OUT/$mode/tool.response.json" ]] &&
+       jq -e '(.choices//[]|length)>0' "$OUT/$mode/tool.response.json" >/dev/null 2>&1; then
+      record "$mode" tool low
+    fi
+    tool_failure "$mode" tool 'HTTP transport, response shape, or finish_reason error'
+  fi
+  if (( tool_valid == 1 )); then
+    if jq -s --arg model "$MODEL_ID" '{model:$model,stream:false,temperature:0,
+       reasoning_effort:"none",max_tokens:256,
+       messages:(.[0].messages + [.[1].choices[0].message,
+         {role:"tool",tool_call_id:.[1].choices[0].message.tool_calls[0].id,content:"ping"},
+         {role:"user",content:"Repeat the tool result exactly, do not call a tool."}])}' \
+      "$OUT/payloads/tool.json" "$OUT/$mode/tool.response.json" \
+      > "$OUT/payloads/tool-followup.json"; then
+      if request tool-followup "$OUT/$mode/tool-followup"; then
+        record "$mode" tool-followup none
+        if ! jq -e '(.choices[0].message.content // "") | contains("ping")' \
+          "$OUT/$mode/tool-followup.response.json" >/dev/null; then
+          tool_failure "$mode" tool-followup 'tool result not reflected'
+        fi
+      else
+        if [[ -s "$OUT/$mode/tool-followup.response.json" ]] &&
+           jq -e '(.choices//[]|length)>0' "$OUT/$mode/tool-followup.response.json" >/dev/null 2>&1; then
+          record "$mode" tool-followup none
+        fi
+        tool_failure "$mode" tool-followup 'HTTP transport, response shape, or finish_reason error'
+      fi
+    else
+      tool_failure "$mode" tool 'could not construct tool continuation'
+    fi
+  fi
   if [[ "$THINK" == on ]]; then
     if [[ "$width" == 1 ]]; then
       request think "$OUT/$mode/think" || fail "$mode high-thinking request"
@@ -430,5 +476,10 @@ done
 jq -r -s '(["mode","case","status","finish","reasoning_chars","answer_chars","tokens"]|@tsv),
   (.[]|[.mode,.case,.status,.finish,(.reasoning_chars|tostring),(.answer_chars|tostring),(.completion_tokens|tostring)]|@tsv)' \
   "$OUT/summary.jsonl" > "$OUT/summary.tsv"
-cat "$OUT/proofs.tsv" "$OUT/parity.tsv"
-printf '[ds41-c8] PASS: C8 packed decode/MTP verified with greedy parity and reasoning; evidence: %s\n' "$OUT"
+cat "$OUT/proofs.tsv" "$OUT/parity.tsv" "$OUT/tool-failures.tsv"
+if (( tool_failures > 0 )); then
+  printf '[ds41-c8] FAIL: %s tool failure(s) recorded; packed/MTP evidence collected. evidence: %s\n' \
+    "$tool_failures" "$OUT" >&2
+  exit 1
+fi
+printf '[ds41-c8] PASS: C8 packed decode/MTP verified with greedy parity, tools and reasoning; evidence: %s\n' "$OUT"

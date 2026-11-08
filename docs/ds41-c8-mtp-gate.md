@@ -53,6 +53,30 @@ screenshots, responses and logs are kept; `summary.tsv`, `summary.jsonl`,
 `parity.tsv` and `proofs.tsv` identify the observed results. This remains a
 bounded test, not long-session, quality or numerical-logit qualification.
 
+## Collect C8 evidence even when C4 tools fail
+
+The default `DS41_C8_TOOL_POLICY=record` records any invalid or failed
+tool call in `tool-failures.tsv`, skips the invalid continuation, and proceeds
+to the remaining Vision, high-thinking and C8/MTP checks. The overall
+result is still **FAIL (exit 1)**, never a false PASS. This lets the
+operator isolate C8 packed decode without repeatedly halting at the known
+C4 tool-format regression.
+
+```bash
+git pull --ff-only
+DS41_C8_MODES='c1-off c8-off c8-on' \
+  bash tests/ds41_c8_mtp_gate.sh
+
+# Old fail-fast behavior, if desired
+DS41_C8_TOOL_POLICY=strict bash tests/ds41_c8_mtp_gate.sh
+```
+
+The per-mode raw response JSON, HTTP status, server log, `summary.tsv`,
+`proofs.tsv` and `tool-failures.tsv` preserve separate tool and
+C8/MTP findings. There is no fallback that fabricates a tool call or
+changes the model's output. Real CUDA and model validation must run
+on the GB10 device.
+
 ## Diagnose a C4 tool-request failure
 
 A message such as `FAIL: c4-off tool` means the **HTTP request check** failed

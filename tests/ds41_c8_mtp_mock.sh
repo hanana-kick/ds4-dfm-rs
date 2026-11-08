@@ -80,4 +80,29 @@ bash "$ROOT/tests/ds41_c8_mtp_gate.sh" --inspect "$TMP/tool-error" > "$TMP/inspe
 grep -q 'HTTP=503' "$TMP/inspect.log"
 grep -q 'synthetic concurrent tool capacity refusal' "$TMP/inspect.log"
 
-echo 'ds41-c8-mtp mock: parity, eight-way MTP, seed guard and C4 tool diagnostics PASS'
+# Force a C4 tool failure but prove that C8 still runs before the entire
+# qualification returns a nonzero status. Never hide the C4 regression.
+unset DS41_C8_MOCK_TOOL_ERROR_WIDTH
+export DS41_C8_MODES='c1-off c4-off c8-on'
+export DS41_C8_MEDIA=off
+export DS41_C8_THINK=off
+export DS41_C8_TOOL_POLICY=record
+export DS41_C8_MOCK_TOOL_ERROR=on
+export DS41_C8_MOCK_TOOL_ERROR_WIDTH=4
+export DS41_C8_OUT="$TMP/record-tool-failure"
+rc=0
+bash "$ROOT/tests/ds41_c8_mtp_gate.sh" > "$TMP/record-tool-failure.log" 2>&1 || rc=$?
+[[ "$rc" == 1 ]] || {
+  echo "FAIL: expected overall FAIL after C4 tool error, got $rc" >&2
+  cat "$TMP/record-tool-failure.log" >&2
+  exit 1
+}
+grep -q $'c4-off\ttool\t' "$TMP/record-tool-failure/tool-failures.tsv"
+grep -q $'c8-on\trows=8\tMTP=on\tobserved' "$TMP/record-tool-failure/proofs.tsv"
+grep -Fq '[ds41-c8] completed c8-on' "$TMP/record-tool-failure.log" || {
+  echo 'FAIL: test stopped before C8 mode' >&2
+  exit 1
+}
+unset DS41_C8_MOCK_TOOL_ERROR_WIDTH DS41_C8_MOCK_TOOL_ERROR DS41_C8_TOOL_POLICY
+
+echo 'ds41-c8-mtp mock: C8 MTP, C4 diagnosis, fail-but-continue and seed guard PASS'

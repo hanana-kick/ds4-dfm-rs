@@ -205,7 +205,7 @@ if [[ -n "$IMAGE" ]]; then
     > "$OUT/template.json"
 else
   jq -n --arg model "$MODEL_ID" \
-    --arg prompt "${DS41_REPRO_TEXT_PROMPT:-이게 뭔가요? 노란 배경의 아이콘에 검은 타원형 눈 두 개, 쉼표 같은 코, 곡선형 입이 있습니다. 간결하게 답하세요.}" \
+    --arg prompt "${DS41_REPRO_TEXT_PROMPT:-이게 뭔가요? 노란 배경의 아이콘에 검은 타원형 눈 두 개, 쉼표 같은 코, 곡선형 입이 있습니다. 확실하지 않으면 추측이라고 명시하고 간결하게 답하세요.}" \
     '{model:$model,stream:false,messages:[{role:"user",content:$prompt}]}' \
     > "$OUT/template.json"
 fi

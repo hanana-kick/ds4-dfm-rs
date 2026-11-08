@@ -112,7 +112,7 @@ batch_metrics() {
 }
 inspect_batch() {
   local dir=$1 mode=$2 width=${2:1:1} log="$1/$2/server.log"
-  [[ -s "$log" ]] || return 0
+  [[ -f "$log" ]] || return 0  # empty log still proves no packed decode was seen
   local max_rows max_full_verify full
   read -r max_rows max_full_verify full < <(batch_metrics "$log" "$width")
   printf '[ds41-c8] %s packed peak: max_rows=%s, full_width_seen=%s, max_verify_at_width=%s\n' \

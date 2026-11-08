@@ -421,7 +421,7 @@ impl ContStepper {
                     );
                 }
                 self.finish = "error";
-            },
+            }
             _ => {}
         }
         let mut parsed_gen = if self.req.kind == ReqKind::Chat {

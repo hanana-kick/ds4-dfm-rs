@@ -36,7 +36,6 @@ impl V41AdmissionQuote {
     }
 }
 
-
 /// Shared target verification workspace, with request-local MTP state.
 /// Requests borrow the same model and cannot be moved to another host thread.
 pub struct V41Batch<'m> {

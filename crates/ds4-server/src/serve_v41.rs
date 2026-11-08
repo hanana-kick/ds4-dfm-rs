@@ -608,11 +608,9 @@ impl<'m> ContExec for V41ContLane<'m> {
                 }
             }
             if let Some((mut work, p)) = pending.take() {
-                let quote = self.batch.admission_quote(
-                    &p.tokens,
-                    p.budget,
-                    p.images.as_ref(),
-                );
+                let quote = self
+                    .batch
+                    .admission_quote(&p.tokens, p.budget, p.images.as_ref());
                 match quote {
                     Ok(q) if q.fits() => {
                         eprintln!(

@@ -39,5 +39,7 @@ jobs:
         run: |
           bash -n tests/ds41_repetition_gate.sh
           perl -x tests/ds41_repetition_gate.sh --self-test
+          perl -c tests/ds41_thinking_verdict.pl
+          perl tests/ds41_thinking_verdict.pl --self-test
       - name: Qualification boundary
         run: echo 'Host checks only. No GPU, model, throughput, C4 logits or concurrent-vision qualification.'

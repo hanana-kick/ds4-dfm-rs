@@ -69,6 +69,55 @@ merely because its reasoning field is absent. The tool test requires
 **exactly one** valid `test_echo(value=ping)` call. Requests explicitly
 using `reasoning_effort=none` do not require a reasoning field.
 
+## High Thinking termination verification
+
+The earlier A–E diagnosis is observational. This verification mode has
+**machine-checked results**, a fixed sampling seed and explicit exit codes.
+It starts one C1 / MTP-OFF server, then sends **sequential** requests with the
+same prompt, image, temperature 1.0, top_p 1.0 and min_p 0:
+
+| Profile | Effort | Max tokens | Condition checked |
+|---|---|---:|---|
+| high-base | high | 8192 | Reproduce high-budget cutoff |
+| high-extended | high | 16384 | Test whether extra budget completes |
+| low-control | low | 8192 | Control: reasoning completion |
+| no-thinking | none | 512 | Control: final answer without thinking |
+
+```bash
+git pull --ff-only
+bash scripts/build.sh
+DS41_TEST_VERIFY=on bash tests/ds41_repetition_gate.sh
+
+# Optional: original failing image, or a larger high budget
+DS41_TEST_VERIFY=on DS41_TEST_IMAGE=/path/to/original.png \
+  DS41_VERIFY_HIGH_TOKENS=32768 \
+  DS41_TEST_REQUEST_TIMEOUT=3600 bash tests/ds41_repetition_gate.sh
+
+# Text-only controls
+DS41_TEST_VERIFY=on DS41_TEST_TEXT_ONLY=on \
+  bash tests/ds41_repetition_gate.sh
+```
+
+With no explicit image, uses the committed synthetic yellow-face fixture.
+`DS41_VERIFY_SEED` defaults to 424242 and is sent in each request. The
+extended budget must exceed 8192; request timeout defaults to 2400 seconds
+in this mode unless `DS41_TEST_REQUEST_TIMEOUT` is set.
+
+- **PASS (exit 0):** Low and no-thinking controls finish; high-extended produces a final answer without detected repetition. If high-base was truncated, its exposed reasoning must prefix the high-extended reasoning exactly under the identical seed.
+- **FAIL (exit 1):** High-extended remains truncated, stops without a final answer, or any profile has detected repeated windows.
+- **INCONCLUSIVE (exit 2):** Missing/error response, failed control, absent reasoning, or differing high-output prefixes despite the identical seed.
+
+Evidence: `verification.json`, `verification.tsv`, `summary.jsonl`, serialized
+request payloads, full responses, thinking/answer text and server log, under
+`runs/ds41-repetition-*/`. The verification script requires a built
+server; it does not download, rebuild or kill unrelated processes.
+
+This is a **bounded HTTP termination test**. It does not expose raw generated
+DSML token IDs or prove a sampler, quantization or EOS-parser defect. If 16K
+still truncates, the correct result is *unresolved within 16K*, not
+*EOS is broken*. `perl tests/ds41_thinking_verdict.pl --self-test` validates
+eight verdict scenarios without GPU or weights.
+
 ## Focused runs
 
 ```bash

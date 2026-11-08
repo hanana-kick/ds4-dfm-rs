@@ -19,6 +19,10 @@ REQUEST_TIMEOUT="${DS41_TEST_REQUEST_TIMEOUT:-900}"
 TOKENS="${DS41_TEST_MAX_TOKENS:-2048}"
 EFFORT="${DS41_TEST_REASONING_EFFORT:-high}"
 DIAGNOSE="${DS41_TEST_DIAGNOSE:-off}"
+VERIFY="${DS41_TEST_VERIFY:-off}"
+VERIFY_HIGH_TOKENS="${DS41_VERIFY_HIGH_TOKENS:-16384}"
+VERIFY_SEED="${DS41_VERIFY_SEED:-424242}"
+VERIFIER="$ROOT/tests/ds41_thinking_verdict.pl"
 MODEL_ID="${DS41_MODEL_ID:-big}"
 MEM_BUDGET="${DS41_MEM_BUDGET_MB:-110000}"
 MEM_FLOOR="${DS41_MEM_FLOOR_GB:-2}"
@@ -26,7 +30,7 @@ TEXT_PROMPT="${DS41_TEST_TEXT_PROMPT:-이게 뭔가요? 노란 배경의 아이�
 IMAGE_PROMPT="${DS41_TEST_IMAGE_PROMPT:-이게 뭔가요? 보이는 특징을 기준으로 판단하고 최종 답변을 간결하게 제시하세요.}"
 FIXTURE_IMAGE="$ROOT/tests/fixtures/ds41-repetition/yellow-face.png"
 IMAGE="${DS41_TEST_IMAGE:-${1:-}}"
-if [[ "$DIAGNOSE" == on && -z "$IMAGE" && "${DS41_TEST_TEXT_ONLY:-off}" != on ]]; then
+if [[ ( "$DIAGNOSE" == on || "$VERIFY" == on ) && -z "$IMAGE" && "${DS41_TEST_TEXT_ONLY:-off}" != on ]]; then
   IMAGE="$FIXTURE_IMAGE"
 fi
 SERVER_PID=''
@@ -38,6 +42,7 @@ Usage: bash tests/ds41_repetition_gate.sh [IMAGE.png|IMAGE.jpg]
   A supplied image reproduces the vision+thinking path (recommended).
   DS41_TEST_DIAGNOSE=on runs a sequential C1/MTP-off A-E sampler matrix.
   It defaults to tests/fixtures/ds41-repetition/yellow-face.png.
+  DS41_TEST_VERIFY=on runs seeded C1 high-budget termination checks.
 
 Requires: built ./ds4-server, downloaded iVQ/Engram/Vision, curl, jq,
           Perl JSON::PP, ss, file, base64. Stop an existing model server first
@@ -50,6 +55,9 @@ Environment:
   DS41_TEST_MAX_TOKENS=2048
   DS41_TEST_REASONING_EFFORT=high (none|low|high|max)
   DS41_TEST_DIAGNOSE=on (C1, MTP off; A-E matrix; returns 0 on HTTP success)
+  DS41_TEST_VERIFY=on (C1, MTP off; high 8K/extended vs low 8K/none)
+  DS41_VERIFY_HIGH_TOKENS=16384 (extended high budget, must exceed 8192)
+  DS41_VERIFY_SEED=424242 (same seed across all verification requests)
   DS41_TEST_TEXT_ONLY=on (diagnostic mode: skip bundled image when no image given)
   DS41_TEST_TEXT_PROMPT=... / DS41_TEST_IMAGE_PROMPT=...
   DS41_TEST_OUT=/fresh/results/dir
@@ -90,6 +98,15 @@ for v in "$BOOT_TIMEOUT" "$REQUEST_TIMEOUT" "$TOKENS"; do
 done
 case "$EFFORT" in none|low|high|max) ;; *) die 'DS41_TEST_REASONING_EFFORT must be none|low|high|max' ;; esac
 case "$DIAGNOSE" in on|off) ;; *) die 'DS41_TEST_DIAGNOSE must be on|off' ;; esac
+case "$VERIFY" in on|off) ;; *) die 'DS41_TEST_VERIFY must be on|off' ;; esac
+if [[ "$VERIFY" == on ]]; then
+  [[ "$DIAGNOSE" == off ]] || die 'choose DS41_TEST_VERIFY or DS41_TEST_DIAGNOSE'
+  [[ -f "$VERIFIER" ]] || die "verification classifier missing: $VERIFIER"
+  [[ "$VERIFY_HIGH_TOKENS" =~ ^[1-9][0-9]*$ ]] && (( VERIFY_HIGH_TOKENS > 8192 )) ||
+    die 'DS41_VERIFY_HIGH_TOKENS must be an integer greater than 8192'
+  [[ "$VERIFY_SEED" =~ ^[0-9]{1,9}$ ]] || die 'DS41_VERIFY_SEED must be 0..999999999'
+  if [[ -z "${DS41_TEST_REQUEST_TIMEOUT:-}" ]]; then REQUEST_TIMEOUT=2400; fi
+fi
 case "${DS41_TEST_TEXT_ONLY:-off}" in on|off) ;; *) die 'DS41_TEST_TEXT_ONLY must be on|off' ;; esac
 [[ -n "$MODEL_ID" ]] || die 'DS41_MODEL_ID may not be empty'
 [[ -x "$BIN" ]] || die "build the server first: ./scripts/build.sh (missing $BIN)"
@@ -103,7 +120,7 @@ if [[ -n "$IMAGE" ]]; then
   [[ "$MIME" == image/png || "$MIME" == image/jpeg ]] || die 'image must be PNG or JPEG'
 fi
 read -r -a MODES <<< "${DS41_TEST_MODES:-c1-off c1-on c4-off c4-on}"
-if [[ "$DIAGNOSE" == on ]]; then MODES=(c1-off); fi
+if [[ "$DIAGNOSE" == on || "$VERIFY" == on ]]; then MODES=(c1-off); fi
 (( ${#MODES[@]} > 0 )) || die 'DS41_TEST_MODES is empty'
 declare -A SEEN=()
 for mode in "${MODES[@]}"; do
@@ -236,6 +253,63 @@ if [[ "$DIAGNOSE" == on ]]; then
   fi
   printf '[ds41-repeat] DIAGNOSTIC COMPLETE: classifications are not a quality PASS\n'
   exit 0
+fi
+
+# Bound the high-thinking question with fixed sampling and real HTTP responses.
+# A PASS requires both controls and the extended high request to terminate.
+# A truncated extended request is bounded evidence, not proof of an EOS bug.
+if [[ "$VERIFY" == on ]]; then
+  : > "$OUT/summary.jsonl"
+  printf 'profile\ttemperature\treasoning_effort\tmax_tokens\tseed\tstatus\tfinish\tcompletion_tokens\tthinking_chars\tanswer_chars\ttruncated\tfinal_answer\tduplicate_windows\n' > "$OUT/verification.tsv"
+  printf 'same prompt/image, C1, MTP off, temperature=1, top_p=1, min_p=0, seed=%s\n' \
+    "$VERIFY_SEED" > "$OUT/verification-settings.txt"
+
+  if ! boot c1-off; then
+    die "verification server failed: $OUT/c1-off/server.log"
+  fi
+
+  verify_kind=text
+  if [[ -n "$IMAGE" ]]; then verify_kind=image; fi
+  transport_failures=0
+  for profile in high-base high-extended low-control no-thinking; do
+    case "$profile" in
+      high-base) effort=high; limit=8192 ;;
+      high-extended) effort=high; limit=$VERIFY_HIGH_TOKENS ;;
+      low-control) effort=low; limit=8192 ;;
+      no-thinking) effort=none; limit=512 ;;
+    esac
+
+    jq --arg effort "$effort" --argjson limit "$limit" \
+       --argjson seed "$VERIFY_SEED" \
+      '.temperature=1.0 | .top_p=1.0 | .min_p=0 |
+       .reasoning_effort=$effort | .max_tokens=$limit | .seed=$seed' \
+      "$OUT/payloads/$verify_kind.json" > "$OUT/payloads/verify-$profile.json"
+    if ! request "verify-$profile" "$OUT/c1-off/$profile"; then
+      transport_failures=$((transport_failures + 1))
+    fi
+    analyse c1-off "$profile" "$effort"
+    jq -r --arg profile "$profile" --arg effort "$effort" \
+       --argjson limit "$limit" --arg seed "$VERIFY_SEED" \
+      '[$profile,"1.0",$effort,($limit|tostring),$seed,.status,
+       .finish_reason,(.completion_tokens|tostring),
+       (.reasoning_chars|tostring),(.answer_chars|tostring),
+       (.truncated|tostring),(.final_answer_present|tostring),
+       (.reasoning_duplicate_windows|tostring)] | @tsv' \
+      "$OUT/c1-off/$profile.analysis.json" >> "$OUT/verification.tsv"
+  done
+
+  stop_server
+  verdict_exit=0
+  perl "$VERIFIER" "$OUT" > "$OUT/verification.json" || verdict_exit=$?
+  cat "$OUT/verification.tsv"
+  jq -r '[.verdict,.category,.reason] | @tsv' "$OUT/verification.json"
+  printf '[ds41-repeat] verification evidence: %s\n' "$OUT"
+  if (( transport_failures > 0 )); then
+    printf '[ds41-repeat] INCONCLUSIVE: %s HTTP transport error(s)\n' \
+      "$transport_failures" >&2
+    exit 2
+  fi
+  exit "$verdict_exit"
 fi
 
 : > "$OUT/summary.jsonl"

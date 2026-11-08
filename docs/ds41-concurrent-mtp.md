@@ -101,3 +101,12 @@ and stops only the process it created. This gate has not been run here.
 ## Thinking repetition and parity
 
 Run `bash tests/ds41_repetition_gate.sh /path/to/reproducing-image.png` on the model host. It starts the existing server launcher for C1/C4 × MTP ON/OFF and records raw reasoning, repeated spans, token-limit exhaustion, tools, and temperature-0 parity. See [repetition gate](ds41-repetition-gate.md). It never stops unrelated processes.
+
+## C8 live qualification
+
+The [C8 + MTP live gate](ds41-c8-mtp-gate.md) checks C1/C4/C8
+plain/MTP outputs, actual eight-request packed decode, MTP target
+verification with more than eight rows, mixed Vision, DSML roundtrip,
+and positive-seed High Thinking in an eight-request cohort. Host-only
+CI runs a deterministic HTTP mock and negative controls; it does not
+qualify GPU execution.

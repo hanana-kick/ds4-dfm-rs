@@ -1,0 +1,34 @@
+name: DS41 C8 MTP gate checks
+on:
+  push:
+    branches: [feat/ds41-entrpi-concurrency]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ds41-c8-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  offline-gate:
+    if: github.repository == 'hanana-kick/ds4-dfm-rs'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y jq iproute2
+          node --version
+      - name: Gate syntax and real response classifier self-tests
+        run: |
+          bash -n tests/ds41_c8_mtp_gate.sh
+          bash -n tests/ds41_c8_mtp_mock.sh
+          node --check tests/fixtures/ds41-c8/mock-server.cjs
+          bash tests/ds41_c8_mtp_gate.sh --self-test
+      - name: Simulated C1/C4/C8 GPU log gate and negative controls
+        run: bash tests/ds41_c8_mtp_mock.sh
+      - name: Scope
+        run: echo 'Mock only; no real model, GB10, CUDA or C8/MTP qualification.'

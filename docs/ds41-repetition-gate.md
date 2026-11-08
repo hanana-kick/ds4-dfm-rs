@@ -118,6 +118,90 @@ still truncates, the correct result is *unresolved within 16K*, not
 *EOS is broken*. `perl tests/ds41_thinking_verdict.pl --self-test` validates
 eight verdict scenarios without GPU or weights.
 
+## Reproduce intermittent failures across seeds
+
+Use `tests/ds41_seed_repro_gate.sh` for a seeded, repeatable
+**C1/MTP-off** experiment. This is separate from the fixed-seed 8K/16K
+termination check above.
+
+```bash
+git pull --ff-only
+bash scripts/build.sh
+
+# 11 default seeds x 2, plus a temperature=0 reference probe
+bash tests/ds41_seed_repro_gate.sh
+
+# Reproduce using the actual original failing image
+DS41_REPRO_IMAGE=/absolute/path/to/failing-image.png \
+  bash tests/ds41_seed_repro_gate.sh
+
+# Faster focused run
+DS41_REPRO_SEEDS='0 1 424242' \
+  bash tests/ds41_seed_repro_gate.sh
+```
+
+The script starts **one** server on loopback (default port 18043),
+sends the same high-thinking prompt twice with each explicit seed and
+temperature 1.0, and compares normalized output (reasoning + final text +
+finish status). It checks the same 100-character repetition heuristic used
+by the existing gate; **token-ID repetition is not directly measured**.
+For failed/unstable seeds it replays at 16,384 tokens and, if that still
+fails, at 32,768 tokens, preserving the seed and exact input.
+
+A successful run writes `runs/ds41-seeds-*/` with `report.tsv`,
+`report.json`, `failure-seeds.txt` (only if any), original JSON
+payloads, individual HTTP responses and status codes, analyzer outputs,
+a separate 2,048-token temperature-0 greedy probe, model/binary details,
+and the server log. `DS41_REPRO_HASH_WEIGHTS=on` performs an optional full
+SHA256 pass over the ~113 GB GGUF plus Vision and Engram input shards;
+without it weight integrity is explicitly unverified.
+
+### Compare against a reference engine
+
+The local sweep **stops its own server** before returning. Start a separate
+reference backend serving OpenAI-compatible `/v1/chat/completions`
+(YoungAi or another engine only if it really implements that API and the
+same model assets); no assumption is made about its interface or file
+compatibility. On one DGX Spark, do **not** run two large models at once.
+
+```bash
+# After the local run has exited, launch the reference separately.
+# Use an SSH loopback tunnel if the reference is on another host.
+DS41_REPRO_REFERENCE_URL=http://127.0.0.1:8001 \
+  bash tests/ds41_seed_repro_gate.sh --reference \
+  /absolute/path/to/runs/ds41-seeds-...
+
+# Recompute report without starting a server
+bash tests/ds41_seed_repro_gate.sh --report \
+  /absolute/path/to/runs/ds41-seeds-...
+```
+
+Reference replay uses the **saved exact payloads**, changing only
+`model` when `DS41_REPRO_REFERENCE_MODEL_ID` is set. It targets
+failed seeds and the deterministic greedy probe, writing separate reference
+responses and comparisons in the same run folder. It does not start, stop,
+or reconfigure the reference server. It accepts localhost HTTP only to
+avoid inadvertently sending the original image or prompt to a third party.
+
+Results:
+
+- `PASS`: all tested seeds completed twice with identical output and
+  no detected string repetition.
+- `FAIL`: at least one seed failed, truncated, or produced inconsistent
+  results.
+- `INCONCLUSIVE`: incomplete/error HTTP evidence.
+
+`local_only_failure` versus `both_failed` is a **lead**, not a
+causal verdict. Even identical seeds can yield different samples under
+different RNG/sampler algorithms. The grep-safe greedy comparison is more
+informative, but different weight quantizations, prompt templates, Vision
+processing and numerical kernels still confound results. Verify weight
+hashes, prompt tokens and token-level logits independently before calling
+an engine or quantization defect. This test does not require Python.
+
+Model-free CI covers Bash syntax, Perl classification and a simulated HTTP
+endpoint; it does **not** certify actual DGX Spark inference.
+
 ## Focused runs
 
 ```bash

@@ -41,5 +41,9 @@ jobs:
           perl -x tests/ds41_repetition_gate.sh --self-test
           perl -c tests/ds41_thinking_verdict.pl
           perl tests/ds41_thinking_verdict.pl --self-test
+          bash -n tests/ds41_seed_repro_gate.sh
+          perl -c tests/ds41_seed_repro_report.pl
+          bash tests/ds41_seed_repro_gate.sh --self-test
+          bash tests/ds41_seed_repro_mock.sh
       - name: Qualification boundary
         run: echo 'Host checks only. No GPU, model, throughput, C4 logits or concurrent-vision qualification.'

@@ -53,6 +53,30 @@ screenshots, responses and logs are kept; `summary.tsv`, `summary.jsonl`,
 `parity.tsv` and `proofs.tsv` identify the observed results. This remains a
 bounded test, not long-session, quality or numerical-logit qualification.
 
+## Diagnose a C4 tool-request failure
+
+A message such as `FAIL: c4-off tool` means the **HTTP request check** failed
+before tool-call parsing, not that the tool parser has been proven wrong.
+Inspect the retained HTTP status, error body, curl stderr and server log
+without restarting the model:
+
+```bash
+bash tests/ds41_c8_mtp_gate.sh --inspect \
+  runs/ds41-c8-20261108-234831-HewAxAgH
+```
+
+If the saved response does not identify the cause, reproduce C4/MTP OFF
+in isolation (cold tool, two text waves, mixed image/text, warm tool):
+
+```bash
+bash tests/ds41_c8_mtp_gate.sh --probe-tool
+```
+
+A cold-only failure points to tool handling or request admission. A
+warm-only failure suggests state or capacity after the preceding requests;
+compare server logs before changing inference code. The probe does not
+qualify C8 or MTP. Neither test modifies the engine or requires a rebuild.
+
 ## Options
 
 ```bash

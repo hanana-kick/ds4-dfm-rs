@@ -34,6 +34,12 @@ const server = http.createServer(async (req, res) => {
     }
   }
   setTimeout(() => {
+    if (process.env.DS41_C8_MOCK_TOOL_ERROR === 'on' && Array.isArray(p.tools) && p.tools.length) {
+      active--;
+      res.writeHead(503);
+      res.end(JSON.stringify({error:{message:'synthetic concurrent tool capacity refusal',type:'server_error'}}));
+      return;
+    }
     const messages=p.messages||[];
     const last=messages[messages.length-1]||{};
     let finish_reason='stop', reasoning_content='', content='', tool_calls;

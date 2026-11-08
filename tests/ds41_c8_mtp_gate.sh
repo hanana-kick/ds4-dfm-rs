@@ -29,7 +29,7 @@ PID=''
 
 usage() {
   cat <<'HELP'
-Usage: bash tests/ds41_c8_mtp_gate.sh [--self-test|--help]
+Usage: bash tests/ds41_c8_mtp_gate.sh [--self-test|--help|--inspect DIR|--probe-tool]
 
 Actual DGX Spark model gate (defaults: C1 plain, C4 plain/MTP, C8 plain/MTP).
 Runs eight concurrent distinct requests for C8, then mixed Vision+text,
@@ -52,10 +52,38 @@ Pass means observed eight independent active rows, real MTP target
 verification, non-thinking greedy C1 parity, valid DSML tool result and
 completed/repetition-free high thinking alongside 7 requests in C8.
 Results/logs are kept. No GPU or model is run by GitHub host-only CI.
+--inspect DIR explains existing HTTP failures, without loading a model.
+--probe-tool tests C4/MTP OFF forced tool before/after text+Vision waves.
 HELP
 }
 die() { printf '[ds41-c8] ERROR: %s\n' "$*" >&2; exit 2; }
 fail() { printf '[ds41-c8] FAIL: %s; evidence: %s\n' "$*" "$OUT" >&2; exit 1; }
+inspect_tool() {
+  local dir=$1 mode=$2 name=$3 path="$1/$2/$3"
+  [[ -f "$path.http" || -f "$path.response.json" || -f "$path.curl.err" ]] || return 0
+  printf '[ds41-c8] %s/%s HTTP=%s\n' "$mode" "$name" "$(cat "$path.http" 2>/dev/null || printf unavailable)"
+  if [[ -s "$path.curl.err" ]]; then
+    printf 'curl error:\n'; tail -n 12 "$path.curl.err"
+  fi
+  if [[ -s "$path.response.json" ]]; then
+    if ! jq -c '{error:(.error//null),finish:(.choices[0].finish_reason//null),tool_calls:((.choices[0].message.tool_calls//[])|length),usage:(.usage//null)}' "$path.response.json"; then
+      printf 'Response is not valid JSON. First 400 bytes:\n'
+      head -c 400 "$path.response.json" || true
+      printf '\n'
+    fi
+  else
+    printf 'No HTTP response body saved\n'
+  fi
+  if [[ -s "$dir/$mode/server.log" ]]; then
+    printf 'Last 35 server log lines:\n'
+    tail -n 35 "$dir/$mode/server.log"
+  fi
+}
+request_failed() {
+  local mode=$1 name=$2
+  inspect_tool "$OUT" "$mode" "$name" >&2
+  fail "$mode $name request rejected or invalid HTTP response"
+}
 stop_server() {
   if [[ -z "$PID" ]]; then return; fi
   kill -TERM "$PID" 2>/dev/null || true
@@ -71,7 +99,21 @@ trap stop_server EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+TOOL_PROBE=off
 case "${1:-}" in
+  --inspect)
+    [[ $# -eq 2 && -d "$2" ]] || die 'usage: --inspect EXISTING_RUN_DIRECTORY'
+    command -v jq >/dev/null || die 'jq required for inspection'
+    for mode in c1-off c4-off c4-on c8-off c8-on; do
+      for case_id in tool tool-cold tool-warm tool-followup; do
+        inspect_tool "$2" "$mode" "$case_id"
+      done
+    done
+    exit 0 ;;
+  --probe-tool)
+    [[ $# -eq 1 ]] || die 'unexpected arguments'
+    TOOL_PROBE=on ;;
+
   --help|-h) usage; exit 0 ;;
   --self-test)
     [[ $# -eq 1 ]] || die 'unexpected arguments'
@@ -106,9 +148,16 @@ if [[ "$MEDIA" == on || "$THINK" == on ]]; then
   done
 fi
 read -r -a MODES <<< "$WIDTHS"
-(( ${#MODES[@]} > 1 )) || die 'at least c1-off + a concurrent mode required'
-[[ "${MODES[0]}" == c1-off ]] || die 'c1-off must be the first mode'
-[[ " ${MODES[*]} " == *' c8-on '* ]] || die 'c8-on must be selected to qualify C8 MTP'
+if [[ "$TOOL_PROBE" == on ]]; then MODES=(c4-off); fi
+if [[ "$TOOL_PROBE" == off ]]; then
+  (( ${#MODES[@]} > 1 )) || die 'at least c1-off + a concurrent mode required'
+fi
+if [[ "$TOOL_PROBE" == off ]]; then
+  [[ "${MODES[0]}" == c1-off ]] || die 'c1-off must be the first mode'
+fi
+if [[ "$TOOL_PROBE" == off ]]; then
+  [[ " ${MODES[*]} " == *' c8-on '* ]] || die 'c8-on must be selected to qualify C8 MTP'
+fi
 declare -A seen
 for mode in "${MODES[@]}"; do
   case "$mode" in c1-off|c1-on|c4-off|c4-on|c8-off|c8-on) ;; *) die "invalid mode: $mode" ;; esac
@@ -284,6 +333,29 @@ prove_batch() {
 : > "$OUT/summary.jsonl"
 printf 'mode\tcase\tparity\n' > "$OUT/parity.tsv"
 printf 'mode\twidth\tmtp\tresult\n' > "$OUT/proofs.tsv"
+if [[ "$TOOL_PROBE" == on ]]; then
+  boot c4-off
+  for round in cold warm; do
+    if [[ "$round" == warm ]]; then
+      wave c4-off '' text-1 text-2 text-3 text-4
+      wave c4-off '' text-5 text-6 text-7 text-8
+      if [[ "$MEDIA" == on ]]; then
+        wave c4-off media- image-a image-b text-1 text-2
+      fi
+    fi
+    request tool "$OUT/c4-off/tool-$round" || request_failed c4-off "tool-$round"
+    record c4-off "tool-$round" low
+    jq -e '.choices[0].finish_reason=="tool_calls" and
+      (.choices[0].message.tool_calls|length)==1 and
+      .choices[0].message.tool_calls[0].function.name=="test_echo" and
+      ((.choices[0].message.tool_calls[0].function.arguments|fromjson).value=="ping")' \
+      "$OUT/c4-off/tool-$round.response.json" >/dev/null || fail "c4-off tool-$round malformed"
+    printf '[ds41-c8] C4 tool %s: HTTP 200, one valid test_echo call\n' "$round"
+  done
+  stop_server
+  printf '[ds41-c8] PROBE PASS (not C8 qualification); evidence: %s\n' "$OUT"
+  exit 0
+fi
 for mode in "${MODES[@]}"; do
   boot "$mode"
   width=${mode:1:1}
@@ -317,7 +389,7 @@ for mode in "${MODES[@]}"; do
       for ((i=1;i<=width-2;i++)); do compare "text-$i" "$mode" "media-text-$i"; done
     fi
   fi
-  request tool "$OUT/$mode/tool" || fail "$mode tool"
+  request tool "$OUT/$mode/tool" || request_failed "$mode" tool
   record "$mode" tool low
   jq -e '.choices[0].finish_reason=="tool_calls" and
       (.choices[0].message.tool_calls|length)==1 and
@@ -330,7 +402,7 @@ for mode in "${MODES[@]}"; do
       {role:"tool",tool_call_id:.[1].choices[0].message.tool_calls[0].id,content:"ping"},
       {role:"user",content:"Repeat the tool result exactly, do not call a tool."}])}' \
     "$OUT/payloads/tool.json" "$OUT/$mode/tool.response.json" > "$OUT/payloads/tool-followup.json"
-  request tool-followup "$OUT/$mode/tool-followup" || fail "$mode tool followup"
+  request tool-followup "$OUT/$mode/tool-followup" || request_failed "$mode" tool-followup
   record "$mode" tool-followup none
   jq -e '(.choices[0].message.content // "") | contains("ping")' \
     "$OUT/$mode/tool-followup.response.json" >/dev/null || fail "$mode lost tool result"

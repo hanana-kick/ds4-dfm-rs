@@ -60,4 +60,24 @@ bash "$ROOT/tests/ds41_c8_mtp_gate.sh" > "$TMP/bad-seed.txt" 2>&1 || rc=$?
 [[ "$rc" == 2 ]] && grep -q 'nonzero fixed seed' "$TMP/bad-seed.txt" || {
   echo 'FAIL: clock seed was not rejected' >&2; exit 1;
 }
-echo 'ds41-c8-mtp mock: parity, eight-way MTP, missing-batch/MTP and seed guard PASS'
+# Cold and warm C4 tool probes should work on a real HTTP double.
+export DS41_C8_SEED=424242
+export DS41_C8_MEDIA=on
+export DS41_C8_OUT="$TMP/tool-probe"
+bash "$ROOT/tests/ds41_c8_mtp_gate.sh" --probe-tool > "$TMP/probe-ok.log" 2>&1
+[[ "$(cat "$TMP/tool-probe/c4-off/tool-cold.http")" == 200 ]]
+[[ "$(cat "$TMP/tool-probe/c4-off/tool-warm.http")" == 200 ]]
+
+# A 503 must fail with HTTP status, JSON error, and saved server evidence.
+export DS41_C8_MOCK_TOOL_ERROR=on
+export DS41_C8_OUT="$TMP/tool-error"
+rc=0
+bash "$ROOT/tests/ds41_c8_mtp_gate.sh" --probe-tool > "$TMP/probe-error.log" 2>&1 || rc=$?
+[[ "$rc" == 1 ]] || { echo "expected probe failure (exit 1), got $rc" >&2; exit 1; }
+grep -q 'HTTP=503' "$TMP/probe-error.log"
+grep -q 'synthetic concurrent tool capacity refusal' "$TMP/probe-error.log"
+bash "$ROOT/tests/ds41_c8_mtp_gate.sh" --inspect "$TMP/tool-error" > "$TMP/inspect.log"
+grep -q 'HTTP=503' "$TMP/inspect.log"
+grep -q 'synthetic concurrent tool capacity refusal' "$TMP/inspect.log"
+
+echo 'ds41-c8-mtp mock: parity, eight-way MTP, seed guard and C4 tool diagnostics PASS'
